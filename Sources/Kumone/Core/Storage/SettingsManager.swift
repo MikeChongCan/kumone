@@ -173,7 +173,7 @@ final class SettingsManager: ObservableObject {
             ?? (defaults.bool(forKey: Keys.showRomaji) ? .romaji : .off)
         verbatimLyrics = defaults.object(forKey: Keys.verbatimLyrics) as? Bool ?? true
         enableUnblock = defaults.object(forKey: Keys.unblock) as? Bool ?? true
-        autoCheckUpdates = defaults.object(forKey: Keys.autoCheckUpdates) as? Bool ?? true
+        autoCheckUpdates = defaults.object(forKey: Keys.autoCheckUpdates) as? Bool ?? false
         showDesktopLyrics = defaults.object(forKey: Keys.desktopLyrics) as? Bool ?? false
         desktopLyricsCentered = defaults.object(forKey: Keys.desktopLyricsCentered) as? Bool ?? false
     }

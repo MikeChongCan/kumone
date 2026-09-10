@@ -81,7 +81,7 @@ struct SettingsView: View {
             }
 
             Section("关于") {
-                LabeledContent("Kumone", value: appVersion)
+                LabeledContent("网易云小乐", value: appVersion)
                 #if os(iOS)
                 Button {
                     IOSUpdater.shared.check(interactive: true)

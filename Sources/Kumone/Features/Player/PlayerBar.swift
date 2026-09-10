@@ -38,7 +38,7 @@ struct PlayerBar: View {
                         VIPBadge()
                     }
                 }
-                Text(player.currentTrack?.artistNames ?? "Kumone")
+                Text(player.currentTrack?.artistNames ?? "网易云小乐")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

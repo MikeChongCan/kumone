@@ -9,11 +9,12 @@ cd "$ROOT"
 
 CONF="${1:-debug}"
 APP_NAME="Kumone"
+APP_DISPLAY_NAME="${APP_DISPLAY_NAME:-网易云小乐}"
 BUNDLE_ID="im.missuo.Kumone"
 # Version resolution: environment > version.env > defaults.
 ENV_MARKETING_VERSION="${MARKETING_VERSION:-}"
 ENV_BUILD_NUMBER="${BUILD_NUMBER:-}"
-MARKETING_VERSION="0.1.0"
+MARKETING_VERSION="0.3.16"
 BUILD_NUMBER="1"
 [ -f "$ROOT/version.env" ] && source "$ROOT/version.env"
 [ -n "$ENV_MARKETING_VERSION" ] && MARKETING_VERSION="$ENV_MARKETING_VERSION"
@@ -109,8 +110,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
     </dict>
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-    <key>CFBundleName</key><string>$APP_NAME</string>
-    <key>CFBundleDisplayName</key><string>$APP_NAME</string>
+    <key>CFBundleName</key><string>$APP_DISPLAY_NAME</string>
+    <key>CFBundleDisplayName</key><string>$APP_DISPLAY_NAME</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$MARKETING_VERSION</string>
     <key>CFBundleVersion</key><string>$BUILD_NUMBER</string>

@@ -12,7 +12,7 @@ public struct KumoneApp: App {
     public init() {}
 
     public var body: some Scene {
-        Window("Kumone", id: "main") {
+        Window("网易云小乐", id: "main") {
             MainWindow()
                 .environmentObject(player)
                 .environmentObject(account)

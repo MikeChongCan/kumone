@@ -37,9 +37,6 @@ public struct IOSMainWindow: View {
             .environment(\.openLogin, { showLogin = true })
             .task {
                 await account.bootstrap()
-                if settings.autoCheckUpdates {
-                    IOSUpdater.shared.check(interactive: false)
-                }
             }
             .sheet(isPresented: $updater.showSheet) {
                 IOSUpdaterSheet()
