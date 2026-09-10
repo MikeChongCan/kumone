@@ -164,7 +164,7 @@ struct HomeView: View {
             if !model.radarPlaylists.isEmpty {
                 Shelf(title: "雷达歌单", rowHeight: Theme.Layout.coverShelfHeight) {
                     ForEach(model.radarPlaylists) { radar in
-                        NavigationLink(value: Destination.playlist(radar.id)) {
+                        NavigationLink(value: Destination.radarPlaylist(radar.id)) {
                             CoverCardBody(
                                 coverURL: radar.coverURL?.resizedImageURL(384),
                                 title: radar.title,

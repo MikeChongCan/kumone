@@ -61,6 +61,7 @@ enum SidebarItem: Hashable {
 
 enum Destination: Hashable {
     case playlist(Int)
+    case radarPlaylist(Int)
     case album(Int)
     case artist(Int)
     case daily
@@ -79,6 +80,8 @@ struct DestinationsModifier: ViewModifier {
                 switch destination {
                 case .playlist(let id):
                     PlaylistDetailView(playlistID: id)
+                case .radarPlaylist(let id):
+                    PlaylistDetailView(playlistID: id, recommendationContext: .radar)
                 case .album(let id):
                     AlbumDetailView(albumID: id)
                 case .artist(let id):

@@ -20,7 +20,9 @@ struct PlayerBar: View {
         .frame(height: Theme.Layout.playerBarHeight)
         .compatGlass(interactive: true, in: Capsule())
         .overlay(Capsule().strokeBorder(.primary.opacity(0.06), lineWidth: 0.5))
-        .padding(.horizontal, 16)
+        // Keep the capsule clear of the window's rounded corners so the inner
+        // and outer radii don't visually merge (#88).
+        .padding(.horizontal, 20)
         .padding(.bottom, Theme.Layout.playerBarBottomMargin)
         .background(alignment: .bottom) { bottomFade }
     }

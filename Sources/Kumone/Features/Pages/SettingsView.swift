@@ -44,6 +44,29 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 #if os(macOS)
+                Toggle("主界面环境色", isOn: $settings.showMainWindowAmbientBackground)
+                if settings.showMainWindowAmbientBackground {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("背景色强度")
+                            Spacer()
+                            Text("\(Int(settings.mainWindowAmbientBackgroundIntensity * 100))%")
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(
+                            value: $settings.mainWindowAmbientBackgroundIntensity,
+                            in: SettingsManager.mainWindowAmbientBackgroundIntensityRange,
+                            step: 0.1
+                        )
+                        HStack {
+                            Text("50%")
+                            Spacer()
+                            Text("150%")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
                 Toggle("桌面歌词", isOn: $settings.showDesktopLyrics)
                 if settings.showDesktopLyrics {
                     Toggle("桌面歌词水平居中", isOn: $settings.desktopLyricsCentered)

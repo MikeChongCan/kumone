@@ -7,13 +7,18 @@ struct NowPlayingView: View {
     @ObservedObject private var lyricsCursor = PlayerService.shared.lyricsCursor
     @EnvironmentObject private var account: AccountStore
     @EnvironmentObject private var settings: SettingsManager
+    #if os(macOS)
+    @EnvironmentObject private var artworkStore: NowPlayingArtworkStore
+    #endif
     #if os(iOS)
     @Environment(\.dismissNowPlayingAction) private var dismissNowPlayingAction
     @Environment(\.dismissNowPlayingDragAction) private var dismissNowPlayingDragAction
     #endif
 
-    @State private var artworkImage: PlatformImage?
-    @State private var colors: ArtworkColors = .fallback
+    #if os(iOS)
+    @State private var loadedArtworkImage: PlatformImage?
+    @State private var loadedArtworkColors: ArtworkColors = .fallback
+    #endif
     @State private var activeIndex: Int?
     @State private var isUserScrolling = false
     @State private var resumeTask: Task<Void, Never>?
@@ -89,9 +94,11 @@ struct NowPlayingView: View {
         .ignoresSafeArea()
         #endif
         .preferredColorScheme(.dark)
+        #if os(iOS)
         .task(id: player.currentTrack?.id) {
             await loadArtwork()
         }
+        #endif
         #if os(iOS)
         .onAppear {
             showLyricsOnMobile = settings.nowPlayingMode == .immersive
@@ -157,6 +164,22 @@ struct NowPlayingView: View {
 
     // MARK: - Backdrop
 
+    private var artworkImage: PlatformImage? {
+        #if os(macOS)
+        artworkStore.artwork
+        #else
+        loadedArtworkImage
+        #endif
+    }
+
+    private var colors: ArtworkColors {
+        #if os(macOS)
+        artworkStore.colors
+        #else
+        loadedArtworkColors
+        #endif
+    }
+
     private var backdrop: some View {
         ZStack {
             LinearGradient(
@@ -176,18 +199,20 @@ struct NowPlayingView: View {
         .animation(.easeInOut(duration: 0.8), value: colors)
     }
 
+    #if os(iOS)
     private func loadArtwork() async {
         guard let urlString = player.currentTrack?.album.picUrl,
               let url = urlString.resizedImageURL(768) else {
-            artworkImage = nil
-            colors = .fallback
+            loadedArtworkImage = nil
+            loadedArtworkColors = .fallback
             return
         }
         if let image = await ImageCache.shared.image(for: url) {
-            artworkImage = image
-            colors = ArtworkPalette.extract(from: image, cacheKey: urlString)
+            loadedArtworkImage = image
+            loadedArtworkColors = ArtworkPalette.extract(from: image, cacheKey: urlString)
         }
     }
+    #endif
 
     // MARK: - Layouts
 
