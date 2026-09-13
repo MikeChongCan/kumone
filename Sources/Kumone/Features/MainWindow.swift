@@ -127,6 +127,9 @@ struct MainWindow: View {
                 #if os(macOS)
                 NowPlayingView()
                     .environmentObject(artworkStore)
+                    // Resolve the slide at the page boundary, including artwork
+                    // inserted asynchronously while the transition is running.
+                    .geometryGroup()
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 #else
                 NowPlayingView()
