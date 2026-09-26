@@ -7,6 +7,18 @@
 `---` 分隔，随后是完整的**中文**部分（`### 新增` / `### 修复` / `### 改进`）。英文块与中文块
 的条目一一对应、顺序一致。（0.3.19 起采用此双语分块格式；更早的版本沿用旧的中英交替格式。）
 
+## 0.3.22 - 2026-09-26
+
+### Fixed
+
+- **macOS**: the downloaded app no longer fails Gatekeeper ("Apple could not verify…" / "damaged") when the zip is extracted by a tool that drops extended attributes — the release zip is now built without them and the MLX kernels are sealed as a plain resource instead of xattr-signed code.
+
+---
+
+### 修复
+
+- **macOS**：用不保留扩展属性的工具解压 zip 后，应用不再被 Gatekeeper 拦截（「Apple 无法验证…」/「已损坏」）——发布 zip 不再携带扩展属性，MLX 内核改为普通资源封存而非依赖 xattr 的独立签名。
+
 ## 0.3.21 - 2026-09-26
 
 ### Added

@@ -49,7 +49,7 @@ stage_build() {
 stage_notarize() {
   log "Notarizing $VERSION via asc profile '$ASC_PROFILE'"
   rm -f "$NOTARY_ZIP"
-  ditto -c -k --keepParent "$APP_BUNDLE" "$NOTARY_ZIP"
+  make_zip "$APP_BUNDLE" "$NOTARY_ZIP"
   local result
   result="$(asc --profile "$ASC_PROFILE" notarization submit --file "$NOTARY_ZIP" --wait --timeout 1h)"
   local id status
@@ -63,6 +63,19 @@ stage_notarize() {
   fi
   log "Stapling ticket"
   xcrun stapler staple "$APP_BUNDLE"
+}
+
+# make_zip <app> <zip> — a zip with no extended attributes / AppleDouble
+# entries. ditto's default archives com.apple.provenance etc. as "._name"
+# sidecars; extractors that cannot fold them back into xattrs leave them as
+# files inside the bundle, which breaks the seal ("unsealed contents present
+# in the root directory of an embedded framework" on 0.3.21).
+make_zip() {
+  rm -f "$2"
+  ditto -c -k --keepParent --norsrc --noextattr --noqtn "$1" "$2"
+  if unzip -l "$2" | grep -q '/\._'; then
+    echo "error: $2 contains AppleDouble entries" >&2; exit 1
+  fi
 }
 
 # verify_app <app> — fails unless a fresh Mac would open it without the
@@ -99,11 +112,13 @@ stage_package() {
   log "Packaging $ZIP"
   mkdir -p "$DIST"
   rm -f "$ZIP"
-  ditto -c -k --keepParent "$APP_BUNDLE" "$ZIP"
-  # Verify what users will actually download, not the working copy.
+  make_zip "$APP_BUNDLE" "$ZIP"
+  # Verify what users will actually download, extracted with plain unzip:
+  # unlike Archive Utility it keeps nothing from extended attributes, so it
+  # is the strictest extractor a user is likely to hit.
   local unpack="$ROOT/.build/zip-check"
   rm -rf "$unpack"; mkdir -p "$unpack"
-  ditto -x -k "$ZIP" "$unpack"
+  unzip -q "$ZIP" -d "$unpack"
   verify_app "$unpack/$APP_NAME.app"
   rm -rf "$unpack"
 

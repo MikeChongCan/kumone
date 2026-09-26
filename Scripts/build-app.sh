@@ -14,7 +14,7 @@ BUNDLE_ID="im.missuo.Kumone"
 # Version resolution: environment > version.env > defaults.
 ENV_MARKETING_VERSION="${MARKETING_VERSION:-}"
 ENV_BUILD_NUMBER="${BUILD_NUMBER:-}"
-MARKETING_VERSION="0.3.21"
+MARKETING_VERSION="0.3.22"
 BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 [ -f "$ROOT/version.env" ] && source "$ROOT/version.env"
 [ -n "$ENV_MARKETING_VERSION" ] && MARKETING_VERSION="$ENV_MARKETING_VERSION"
@@ -86,8 +86,8 @@ fi
 mkdir -p "$APP_BUNDLE/Contents/Frameworks"
 cp -a "$SPARKLE_FW" "$APP_BUNDLE/Contents/Frameworks/"
 
-# MLX's Metal kernels, for AutoMix stem transitions. MLX loads `mlx.metallib`
-# from beside the running binary first, so the app always gets one there.
+# MLX's Metal kernels, for AutoMix stem transitions, shipped in a resource
+# bundle under Contents/Resources (see below for why not Contents/MacOS).
 # Sources, most specific first:
 #   1. $BIN_PATH/mlx.metallib — placed beside this very configuration's binary
 #      by Scripts/fetch-mlx-metallib.sh (Command Line Tools builds).
@@ -115,8 +115,34 @@ if [ -z "$METALLIB" ] && [ "${FETCH_MLX_METALLIB:-0}" = "1" ]; then
   METALLIB="$BIN_PATH/mlx.metallib"
 fi
 if [ -n "$METALLIB" ]; then
+  # Shipped as Contents/Resources/mlx-swift_Cmlx.bundle — the SwiftPM
+  # resource bundle MLX probes (default.metallib) and StemKit's
+  # findMetallib() probes (mlx.metallib, a symlink here). It must NOT live in
+  # Contents/MacOS: codesign treats everything there as nested code, and a
+  # non-Mach-O file can only carry a signature in extended attributes, which
+  # zip extraction may drop (0.3.21 failed Gatekeeper exactly that way).
+  # Under Contents/Resources it is sealed as an ordinary hashed resource.
   echo "mlx.metallib <- $METALLIB"
-  cp "$METALLIB" "$APP_BUNDLE/Contents/MacOS/mlx.metallib"
+  CMLX_DEST="$APP_BUNDLE/Contents/Resources/mlx-swift_Cmlx.bundle/Contents"
+  mkdir -p "$CMLX_DEST/Resources"
+  cp "$METALLIB" "$CMLX_DEST/Resources/default.metallib"
+  ln -s default.metallib "$CMLX_DEST/Resources/mlx.metallib"
+  if [ -f "$BIN_PATH/mlx-swift_Cmlx.bundle/Contents/Info.plist" ]; then
+    cp "$BIN_PATH/mlx-swift_Cmlx.bundle/Contents/Info.plist" "$CMLX_DEST/Info.plist"
+  else
+    cat > "$CMLX_DEST/Info.plist" <<'CMLXPLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key><string>mlx-swift.Cmlx.resources</string>
+    <key>CFBundleName</key><string>mlx-swift_Cmlx</string>
+    <key>CFBundlePackageType</key><string>BNDL</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+</dict>
+</plist>
+CMLXPLIST
+  fi
 else
   # Shipping without the kernels silently disables every stem hand-over and
   # is indistinguishable from a planner bug in the field (2026-08-31: a day
@@ -137,9 +163,8 @@ for lproj in "$ROOT"/Sources/Kumone/Resources/*.lproj; do
   [ -d "$lproj" ] && cp -R "$lproj" "$APP_BUNDLE/Contents/Resources/"
 done
 
-# SwiftPM resource bundles (if any). mlx-swift_Cmlx.bundle only carries the
-# kernels already copied to Contents/MacOS/mlx.metallib above (~100 MB), and
-# MLX finds the colocated copy first, so it is left out.
+# SwiftPM resource bundles (if any). mlx-swift_Cmlx.bundle is assembled
+# above from whichever metallib was found, so the built one is skipped.
 find "$BIN_PATH" -maxdepth 1 -name '*.bundle' -not -name '*Tests*' \
   -not -name 'mlx-swift_Cmlx.bundle' -print0 |
   while IFS= read -r -d '' bundle; do
@@ -225,8 +250,6 @@ SIGN_IDENTITY="${SIGN_IDENTITY:-}"
 if [ -n "$SIGN_IDENTITY" ]; then
   echo "Codesigning with $SIGN_IDENTITY (Hardened Runtime + Timestamp)..."
   FW="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
-  [ -f "$APP_BUNDLE/Contents/MacOS/mlx.metallib" ] && \
-    codesign -f -o runtime --timestamp -s "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/MacOS/mlx.metallib"
   codesign -f -o runtime --timestamp --preserve-metadata=entitlements -s "$SIGN_IDENTITY" "$FW/Versions/B/XPCServices/Downloader.xpc"
   codesign -f -o runtime --timestamp --preserve-metadata=entitlements -s "$SIGN_IDENTITY" "$FW/Versions/B/XPCServices/Installer.xpc"
   codesign -f -o runtime --timestamp -s "$SIGN_IDENTITY" "$FW/Versions/B/Autoupdate"
