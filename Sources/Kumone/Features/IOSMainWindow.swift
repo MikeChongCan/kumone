@@ -7,6 +7,7 @@ public struct IOSMainWindow: View {
     @StateObject private var settings = SettingsManager.shared
     @StateObject private var toasts = ToastCenter.shared
     @StateObject private var updater = IOSUpdater.shared
+    @StateObject private var artworkStore = NowPlayingArtworkStore()
     @Namespace private var nowPlayingTransition
     @Environment(\.colorScheme) private var systemColorScheme
 
@@ -18,11 +19,12 @@ public struct IOSMainWindow: View {
 
     @State private var selectedTab: IOSTab = .home
     @State private var showLogin = false
-    @State private var homePath = NavigationPath()
-    @State private var explorePath = NavigationPath()
-    @State private var fmPath = NavigationPath()
-    @State private var searchPath = NavigationPath()
-    @State private var libraryPath = NavigationPath()
+    @State private var homePath: [Destination] = []
+    @State private var explorePath: [Destination] = []
+    @State private var fmPath: [Destination] = []
+    @State private var searchPath: [Destination] = []
+    @State private var libraryPath: [Destination] = []
+    @State private var iPadPath: [Destination] = []
 
     public init() {}
 
@@ -32,11 +34,16 @@ public struct IOSMainWindow: View {
             .environmentObject(account)
             .environmentObject(settings)
             .environmentObject(toasts)
+            .environmentObject(artworkStore)
             .tint(Theme.accent)
             .preferredColorScheme(settings.appearance.colorScheme)
             .environment(\.openLogin, { showLogin = true })
+            .environment(\.openDestination, openDestination)
             .task {
                 await account.bootstrap()
+            }
+            .task(id: settings.showMainWindowAmbientBackground) {
+                artworkStore.setArtworkNeeded(settings.showMainWindowAmbientBackground)
             }
             .sheet(isPresented: $updater.showSheet) {
                 IOSUpdaterSheet()
@@ -132,9 +139,18 @@ public struct IOSMainWindow: View {
     @ViewBuilder
     private var appContent: some View {
         if UIDevice.current.userInterfaceIdiom == .pad {
-            MainWindow()
+            MainWindow(path: $iPadPath)
         } else {
             tabInterface
+                .overlay {
+                    if settings.showMainWindowAmbientBackground {
+                        MainWindowAmbientBackground(
+                            colors: artworkStore.colors,
+                            intensity: settings.mainWindowAmbientBackgroundIntensity
+                        )
+                        .ignoresSafeArea()
+                    }
+                }
         }
     }
 
@@ -148,7 +164,7 @@ public struct IOSMainWindow: View {
             usesSystemInteractiveDismissal: usesSystemInteractiveDismissal,
             dismissAnimation: dismissAnimation
         ) {
-            NowPlayingView()
+            NowPlayingView(onOpenDestination: openDestination)
                 .environmentObject(player)
                 .environmentObject(account)
                 .environmentObject(settings)
@@ -242,12 +258,25 @@ public struct IOSMainWindow: View {
 
     private func popToRoot(_ tab: IOSTab) {
         switch tab {
-        case .home: homePath = NavigationPath()
-        case .explore: explorePath = NavigationPath()
-        case .fm: fmPath = NavigationPath()
-        case .search: searchPath = NavigationPath()
-        case .library: libraryPath = NavigationPath()
+        case .home: homePath = []
+        case .explore: explorePath = []
+        case .fm: fmPath = []
+        case .search: searchPath = []
+        case .library: libraryPath = []
         }
+    }
+
+    private func openDestination(_ destination: Destination) {
+        player.showNowPlaying = false
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            iPadPath.appendIfNotCurrent(destination)
+            return
+        }
+
+        let path = binding(for: selectedTab)
+        var destinations = path.wrappedValue
+        destinations.appendIfNotCurrent(destination)
+        path.wrappedValue = destinations
     }
 
     @ViewBuilder
@@ -271,7 +300,7 @@ public struct IOSMainWindow: View {
             .zIndex(selectedTab == tab ? 1 : 0)
     }
 
-    private func binding(for tab: IOSTab) -> Binding<NavigationPath> {
+    private func binding(for tab: IOSTab) -> Binding<[Destination]> {
         switch tab {
         case .home: return $homePath
         case .explore: return $explorePath

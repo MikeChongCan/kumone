@@ -3,6 +3,8 @@ import SwiftUI
 /// Immersive full-window now-playing page: artwork-tinted gradient backdrop,
 /// large artwork on the left, big synced lyrics on the right.
 struct NowPlayingView: View {
+    let onOpenDestination: (Destination) -> Void
+
     @EnvironmentObject private var player: PlayerService
     @ObservedObject private var lyricsCursor = PlayerService.shared.lyricsCursor
     @EnvironmentObject private var account: AccountStore
@@ -272,7 +274,10 @@ struct NowPlayingView: View {
                 height: NowPlayingPresentationMetrics.immersiveHeaderTopInset
             )
 
-            CompactTrackHeader(showsExpandedArtwork: showsVinyl)
+            CompactTrackHeader(
+                showsExpandedArtwork: showsVinyl,
+                onOpenDestination: onOpenDestination
+            )
                 .padding(.bottom, 10)
             #else
             Spacer().frame(height: 30)
@@ -404,6 +409,7 @@ struct NowPlayingView: View {
 
             CompactTrackHeader(
                 showsExpandedArtwork: showsExpandedArtwork,
+                onOpenDestination: onOpenDestination,
                 onTapArtwork: collapseImmersiveArtwork
             )
             .padding(.bottom, 14)
@@ -455,7 +461,6 @@ struct NowPlayingView: View {
         VStack(spacing: 17) {
             NowPlayingScrubber()
             CompactTransportControls()
-            CompactVolumeControl()
             CompactSecondaryControls(
                 showsLyrics: showLyricsOnMobile,
                 showsQueue: showQueueOnMobile,
@@ -554,7 +559,10 @@ struct NowPlayingView: View {
         return VStack(spacing: 0) {
             ZStack(alignment: .top) {
                 Color.clear
-                MinimalTrackInfoRow(metadataOnly: true)
+                MinimalTrackInfoRow(
+                    onOpenDestination: onOpenDestination,
+                    metadataOnly: true
+                )
                     .padding(.top, NowPlayingPresentationMetrics.immersiveHeaderTopInset)
                     .opacity(showLyricsOnMobile ? 1 : 0)
                     .accessibilityHidden(!showLyricsOnMobile)
@@ -601,11 +609,14 @@ struct NowPlayingView: View {
     private var minimalControls: some View {
         VStack(spacing: 22) {
             ZStack {
-                MinimalTrackInfoRow()
+                MinimalTrackInfoRow(onOpenDestination: onOpenDestination)
                     .opacity(showLyricsOnMobile ? 0 : 1)
                     .allowsHitTesting(!showLyricsOnMobile)
                     .accessibilityHidden(showLyricsOnMobile)
-                MinimalTrackInfoRow(actionsOnly: true)
+                MinimalTrackInfoRow(
+                    onOpenDestination: onOpenDestination,
+                    actionsOnly: true
+                )
                     .opacity(showLyricsOnMobile ? 1 : 0)
                     .allowsHitTesting(showLyricsOnMobile)
                     .accessibilityHidden(!showLyricsOnMobile)
@@ -654,23 +665,41 @@ struct NowPlayingView: View {
 
     private func artworkView(size: CGFloat) -> some View {
         Group {
+            if let album = player.currentTrack?.album, album.id > 0, !album.name.isEmpty {
+                Button {
+                    onOpenDestination(.album(album.id))
+                } label: {
+                    artworkSurface(size: size)
+                }
+                .buttonStyle(.plain)
+                .noFocusRing()
+                .accessibilityLabel("打开专辑：\(album.name)")
+            } else {
+                artworkSurface(size: size)
+            }
+        }
+    }
+
+    private func artworkSurface(size: CGFloat) -> some View {
+        ZStack {
+            Rectangle()
+                .fill(.white.opacity(0.06))
+                .overlay(
+                    Image(systemName: "music.note")
+                        .font(.system(size: 48, weight: .light))
+                        .foregroundStyle(.white.opacity(0.3))
+                )
             if let artworkImage {
                 Image(platformImage: artworkImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-            } else {
-                Rectangle()
-                    .fill(.white.opacity(0.06))
-                    .overlay(
-                        Image(systemName: "music.note")
-                            .font(.system(size: 48, weight: .light))
-                            .foregroundStyle(.white.opacity(0.3))
-                    )
+                    .transition(.opacity)
             }
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .shadow(color: .black.opacity(0.45), radius: 36, y: 18)
+        .animation(.easeIn(duration: 0.25), value: artworkImage != nil)
         .scaleEffect(player.isPlaying ? 1 : 0.95)
         .animation(AppAnimation.bouncy, value: player.isPlaying)
     }
@@ -686,10 +715,14 @@ struct NowPlayingView: View {
                     VIPBadge()
                 }
             }
-            Text("\(player.currentTrack?.artistNames ?? "") — \(player.currentTrack?.album.name ?? "")")
-                .font(.system(size: 13.5))
-                .foregroundStyle(.white.opacity(0.65))
-                .lineLimit(1)
+            if let track = player.currentTrack {
+                NowPlayingTrackDestinationLinks(
+                    track: track,
+                    font: .system(size: 13.5),
+                    color: .white.opacity(0.65),
+                    onOpenDestination: onOpenDestination
+                )
+            }
         }
         .frame(maxWidth: 400)
     }
@@ -754,12 +787,16 @@ struct NowPlayingView: View {
                 }
                 .frame(maxWidth: .infinity)
             } else {
+                // All three queue orders on the one button; the cycle skips
+                // AutoMix wherever it could do nothing (AutoMix off, order
+                // off), so this row keeps its present width and its two-state
+                // behaviour there — as it does on iOS, which has no AutoMix at
+                // all. Only the three values below differ per platform.
                 circleButton(
-                    icon: "shuffle", size: 14,
-                    tint: player.shuffleEnabled ? Theme.accent : nil
-                ) {
-                    player.toggleShuffle()
-                }
+                    icon: queueOrderIcon, size: 14,
+                    tint: queueOrderIsActive ? Theme.accent : nil,
+                    action: cycleQueueOrder
+                )
                 .frame(maxWidth: .infinity)
                 circleButton(icon: "backward.fill", size: 16) {
                     player.previous()
@@ -813,6 +850,35 @@ struct NowPlayingView: View {
             }
         }
         .buttonStyle(.pressable)
+    }
+
+    // MARK: - Queue-order control
+
+    /// The queue-order button's three platform-dependent values. macOS cycles
+    /// `listed → shuffled → autoMix`; iOS has no AutoMix and toggles shuffle.
+
+    private var queueOrderIcon: String {
+        #if os(macOS)
+        player.queueOrder.symbolName
+        #else
+        "shuffle"
+        #endif
+    }
+
+    private var queueOrderIsActive: Bool {
+        #if os(macOS)
+        player.queueOrder != .listed
+        #else
+        player.shuffleEnabled
+        #endif
+    }
+
+    private func cycleQueueOrder() {
+        #if os(macOS)
+        player.cycleQueueOrder()
+        #else
+        player.toggleShuffle()
+        #endif
     }
 
     private func circleButton(icon: String, size: CGFloat,
@@ -1180,6 +1246,7 @@ private struct CompactTrackHeader: View {
     @State private var showAddToPlaylist = false
 
     let showsExpandedArtwork: Bool
+    let onOpenDestination: (Destination) -> Void
     /// Tap handler for the compact cover (used to collapse lyrics back to
     /// artwork). The real image floats above this placeholder with hit-testing
     /// disabled, so taps land here.
@@ -1209,10 +1276,14 @@ private struct CompactTrackHeader: View {
                         VIPBadge()
                     }
                 }
-                Text(player.currentTrack?.artistNames ?? "")
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.62))
-                    .lineLimit(1)
+                if let track = player.currentTrack {
+                    NowPlayingTrackDestinationLinks(
+                        track: track,
+                        font: .subheadline,
+                        color: .white.opacity(0.62),
+                        onOpenDestination: onOpenDestination
+                    )
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .offset(
@@ -1252,6 +1323,12 @@ private struct CompactTrackHeader: View {
                         }
 
                         Divider()
+
+                        #if os(iOS)
+                        SleepTimerMenu(player: player)
+
+                        Divider()
+                        #endif
 
                         Button {
                             Platform.copyToPasteboard(
@@ -1315,55 +1392,64 @@ private struct CompactTransportControls: View {
     }
 }
 
-private struct CompactVolumeControl: View {
+#if os(iOS)
+private struct CompactVolumePopover: View {
     @EnvironmentObject private var player: PlayerService
     @State private var isDragging = false
 
     var body: some View {
-        HStack(spacing: 11) {
-            Image(systemName: "speaker.fill")
-                .font(.caption2)
-            // One GeometryReader with the gesture on the ZStack. A nested
-            // GeometryReader (the old TranslucentSliderTrack) silently dropped
-            // the drag, so the volume slider did nothing (#37).
+        VStack(spacing: 12) {
+            Image(systemName: "speaker.wave.3.fill")
+                .font(.system(size: 16, weight: .medium))
+
             GeometryReader { geo in
-                let width = geo.size.width
+                let height = geo.size.height
                 let fraction = min(max(CGFloat(player.volume), 0), 1)
-                ZStack(alignment: .leading) {
-                    Capsule().fill(.white.opacity(0.28))
-                    Capsule().fill(.white.opacity(0.78))
-                        .frame(width: width * fraction)
+                ZStack(alignment: .bottom) {
+                    Capsule().fill(.white.opacity(0.22))
+                    Capsule().fill(.white.opacity(0.82))
+                        .frame(height: height * fraction)
                 }
-                .frame(height: isDragging ? 10 : 6)
-                .frame(maxHeight: .infinity)
+                .frame(width: isDragging ? 12 : 8)
+                .frame(maxWidth: .infinity)
                 .contentShape(Rectangle())
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
                             isDragging = true
-                            updateVolume(at: value.location.x, width: width)
+                            updateVolume(at: value.location.y, height: height)
                         }
                         .onEnded { value in
-                            updateVolume(at: value.location.x, width: width)
+                            updateVolume(at: value.location.y, height: height)
                             isDragging = false
                         }
                 )
                 .animation(.spring(response: 0.24, dampingFraction: 0.82), value: isDragging)
             }
-            .frame(height: 24)
+            .frame(width: 32, height: 132)
             .accessibilityElement()
             .accessibilityLabel("音量")
             .accessibilityValue("\(Int((player.volume * 100).rounded()))%")
             .accessibilityAdjustableAction(adjustVolume)
-            Image(systemName: "speaker.wave.3.fill")
-                .font(.caption)
+
+            Image(systemName: player.volume == 0 ? "speaker.slash.fill" : "speaker.fill")
+                .font(.system(size: 14, weight: .medium))
         }
-        .foregroundStyle(.white.opacity(0.7))
+        .foregroundStyle(.white.opacity(0.85))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(alignment: .bottom) {
+            Triangle()
+                .fill(.white.opacity(0.18))
+                .frame(width: 16, height: 8)
+                .offset(y: 8)
+        }
     }
 
-    private func updateVolume(at location: CGFloat, width: CGFloat) {
-        guard width > 0 else { return }
-        player.volume = Float(min(max(location / width, 0), 1))
+    private func updateVolume(at location: CGFloat, height: CGFloat) {
+        guard height > 0 else { return }
+        player.volume = Float(min(max(1 - location / height, 0), 1))
     }
 
     private func adjustVolume(_ direction: AccessibilityAdjustmentDirection) {
@@ -1381,6 +1467,7 @@ private struct CompactVolumeControl: View {
 
 private struct CompactSecondaryControls: View {
     @EnvironmentObject private var player: PlayerService
+    @State private var showsVolumeControl = false
     let showsLyrics: Bool
     let showsQueue: Bool
     let onToggleLyrics: () -> Void
@@ -1398,11 +1485,36 @@ private struct CompactSecondaryControls: View {
                 .frame(maxWidth: .infinity)
 
             secondaryButton(
+                icon: volumeIcon,
+                label: showsVolumeControl ? "关闭音量控制" : "显示音量控制",
+                isActive: showsVolumeControl
+            ) {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                    showsVolumeControl.toggle()
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if showsVolumeControl {
+                    CompactVolumePopover()
+                        .offset(y: -44)
+                        .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottom)))
+                        .zIndex(1)
+                }
+            }
+
+            secondaryButton(
                 icon: "list.bullet",
                 label: showsQueue ? "关闭播放队列" : "显示播放队列",
                 isActive: showsQueue
             ) { onToggleQueue() }
         }
+    }
+
+    private var volumeIcon: String {
+        let volume = player.volume
+        if volume == 0 { return "speaker.slash" }
+        if volume < 0.5 { return "speaker.wave.1" }
+        return "speaker.wave.2"
     }
 
     private func secondaryButton(
@@ -1424,6 +1536,18 @@ private struct CompactSecondaryControls: View {
         .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 }
+
+private struct Triangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { path in
+            path.move(to: CGPoint(x: rect.midX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+            path.closeSubpath()
+        }
+    }
+}
+#endif
 
 private struct CompactQueueContent: View {
     @EnvironmentObject private var player: PlayerService
@@ -1905,6 +2029,7 @@ private struct MinimalTrackInfoRow: View {
     @EnvironmentObject private var account: AccountStore
     @State private var showAddToPlaylist = false
     @State private var airPlayRequest = 0
+    let onOpenDestination: (Destination) -> Void
     var metadataOnly = false
     var actionsOnly = false
 
@@ -1954,10 +2079,14 @@ private struct MinimalTrackInfoRow: View {
                     VIPBadge()
                 }
             }
-            Text(player.currentTrack?.artistNames ?? "")
-                .font(.footnote)
-                .foregroundStyle(.white.opacity(0.62))
-                .lineLimit(1)
+            if let track = player.currentTrack {
+                NowPlayingTrackDestinationLinks(
+                    track: track,
+                    font: .footnote,
+                    color: .white.opacity(0.62),
+                    onOpenDestination: onOpenDestination
+                )
+            }
         }
         .multilineTextAlignment(textAlignment)
         .accessibilityElement(children: .contain)
@@ -2000,6 +2129,12 @@ private struct MinimalTrackInfoRow: View {
             }
 
             Divider()
+
+            #if os(iOS)
+            SleepTimerMenu(player: player)
+
+            Divider()
+            #endif
 
             Button {
                 Platform.copyToPasteboard(
