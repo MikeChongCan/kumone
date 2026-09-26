@@ -185,9 +185,15 @@ stage_publish() {
       --title "v$VERSION" --notes-file "$notes" --latest
   fi
   log "Checking the live feed"
-  sleep 5
-  curl -fsSL "$FEED_URL" | grep -q "<sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>" \
-    || { echo "error: live appcast does not list $VERSION yet" >&2; exit 1; }
+  # GitHub's releases/latest redirect can lag a new release by a minute.
+  local attempt
+  for attempt in 1 2 3 4 5 6; do
+    if curl -fsSL "$FEED_URL" | grep -q "<sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>"; then
+      echo "live appcast lists $VERSION"; break
+    fi
+    [ "$attempt" -lt 6 ] || { echo "error: live appcast does not list $VERSION after 3 minutes" >&2; exit 1; }
+    sleep 30
+  done
   echo "https://github.com/$GH_REPO/releases/tag/v$VERSION"
 }
 
