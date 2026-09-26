@@ -14,14 +14,14 @@ BUNDLE_ID="im.missuo.Kumone"
 # Version resolution: environment > version.env > defaults.
 ENV_MARKETING_VERSION="${MARKETING_VERSION:-}"
 ENV_BUILD_NUMBER="${BUILD_NUMBER:-}"
-MARKETING_VERSION="0.3.18"
+MARKETING_VERSION="0.3.20"
 BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 [ -f "$ROOT/version.env" ] && source "$ROOT/version.env"
 [ -n "$ENV_MARKETING_VERSION" ] && MARKETING_VERSION="$ENV_MARKETING_VERSION"
 [ -n "$ENV_BUILD_NUMBER" ] && BUILD_NUMBER="$ENV_BUILD_NUMBER"
 
-SPARKLE_FEED_URL="https://github.com/missuo/kumone/releases/latest/download/appcast.xml"
-SPARKLE_PUBLIC_ED_KEY="RHEhllstUuuVrVDCPGrbhg/8LivSzpuZB9X3u3xdV5o="
+SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://github.com/MikeChongCan/kumone/releases/latest/download/appcast.xml}"
+SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-bGoJmEwjg5Uk7C1kVa3Lg2I4I66BpAw0Wo+akvQIBZU=}"
 
 BUILD_DIR="$ROOT/.build/app"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
@@ -220,6 +220,22 @@ if [ -n "${ARCHES:-}" ]; then
 fi
 
 xattr -cr "$APP_BUNDLE" 2>/dev/null || true
-codesign --force --sign - "$APP_BUNDLE" >/dev/null 2>&1 || true
+
+SIGN_IDENTITY="${SIGN_IDENTITY:-}"
+if [ -n "$SIGN_IDENTITY" ]; then
+  echo "Codesigning with $SIGN_IDENTITY (Hardened Runtime + Timestamp)..."
+  FW="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
+  [ -f "$APP_BUNDLE/Contents/MacOS/mlx.metallib" ] && \
+    codesign -f -o runtime --timestamp -s "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/MacOS/mlx.metallib"
+  codesign -f -o runtime --timestamp --preserve-metadata=entitlements -s "$SIGN_IDENTITY" "$FW/Versions/B/XPCServices/Downloader.xpc"
+  codesign -f -o runtime --timestamp --preserve-metadata=entitlements -s "$SIGN_IDENTITY" "$FW/Versions/B/XPCServices/Installer.xpc"
+  codesign -f -o runtime --timestamp -s "$SIGN_IDENTITY" "$FW/Versions/B/Autoupdate"
+  codesign -f -o runtime --timestamp -s "$SIGN_IDENTITY" "$FW/Versions/B/Updater.app"
+  codesign -f -o runtime --timestamp -s "$SIGN_IDENTITY" "$FW"
+  codesign -f -o runtime --timestamp -s "$SIGN_IDENTITY" "$APP_BUNDLE"
+  codesign --verify --deep --strict "$APP_BUNDLE"
+else
+  codesign --force --sign - "$APP_BUNDLE" >/dev/null 2>&1 || true
+fi
 
 echo "Built $APP_BUNDLE ($CONF, $GIT_COMMIT)"
