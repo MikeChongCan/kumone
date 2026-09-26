@@ -9,7 +9,7 @@
 # XcodeGen; it is only needed after editing project.yml, never for CarPlay.
 
 .DEFAULT_GOAL := help
-.PHONY: help configure configure-carplay project build test app ios-test ios-uitest clean
+.PHONY: help configure configure-carplay project build test app release-macos ios-test ios-uitest clean
 
 help: ## Show this help
 	@echo "Kumone make targets:"
@@ -33,6 +33,9 @@ test: ## Run the macOS SwiftPM test suite
 
 app: ## Build and bundle the macOS .app (Scripts/build-app.sh)
 	@Scripts/build-app.sh $(CONFIG)
+
+release-macos: ## Build, notarize, staple, verify and publish the macOS release (needs SIGN_IDENTITY)
+	@Scripts/release-macos.sh $(STAGES)
 
 IOS_DESTINATION ?= platform=iOS Simulator,name=iPhone 17 Pro
 
