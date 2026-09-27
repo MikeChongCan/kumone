@@ -100,6 +100,18 @@ final class AudioOutputController: ObservableObject {
         }
     }
 
+    /// The user is about to pick a speaker in the system AirPlay menu. A
+    /// pinned device would keep the engine away from it, so once the system
+    /// output lands on an AirPlay device within `airPlayPickWindow` we switch
+    /// to "系统默认" as if the user had picked it. Dismissing the menu without
+    /// a choice leaves the current selection alone.
+    func expectSystemAirPlayPick() {
+        airPlayPickDeadline = Date().addingTimeInterval(Self.airPlayPickWindow)
+    }
+
+    private static let airPlayPickWindow: TimeInterval = 60
+    private var airPlayPickDeadline: Date?
+
     /// The user picked a menu row.
     func select(_ selection: AudioOutputSelection) {
         refreshDevices()
@@ -215,6 +227,18 @@ final class AudioOutputController: ObservableObject {
 
     private func hardwareChanged() {
         refreshDevices()
+        if let deadline = airPlayPickDeadline {
+            if Date() > deadline {
+                airPlayPickDeadline = nil
+            } else if let id = defaultDeviceID,
+                      devices.first(where: { $0.id == id })?.isAirPlay == true {
+                airPlayPickDeadline = nil
+                if selection != .systemDefault {
+                    handle(state.select(.systemDefault, from: devices), damped: false)
+                    return
+                }
+            }
+        }
         handle(state.reconcile(with: devices), damped: true)
     }
 }

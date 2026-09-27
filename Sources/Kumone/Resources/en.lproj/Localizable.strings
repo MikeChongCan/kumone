@@ -321,7 +321,8 @@
 "蓝牙" = "Bluetooth";
 "虚拟" = "Virtual";
 "聚合" = "Aggregate";
-"AirPlay 音箱需先在控制中心或“声音”设置中选择一次，才会出现在这里" = "AirPlay speakers appear here after you’ve picked them once in Control Center or Sound settings";
+"连接 AirPlay 音箱…" = "Connect AirPlay Speaker…";
+"打开系统 AirPlay 菜单，搜索 HomePod 等音箱" = "Opens the system AirPlay menu to find HomePod and other speakers";
 "声音设置…" = "Sound Settings…";
 "打开系统设置中的“声音”" = "Opens Sound in System Settings";
 

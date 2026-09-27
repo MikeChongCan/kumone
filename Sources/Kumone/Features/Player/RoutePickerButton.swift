@@ -84,13 +84,13 @@ import AppKit
 /// (◯) OF27UT Pro   HDMI               ← wired, then Bluetooth
 /// 虚拟设备                              ← only when there are any
 /// AirPlay
-///     AirPlay 音箱需先在控制中心…        ← hint, only when none are listed
+/// (◯) 客厅 HomePod                     ← only once macOS has connected it
+/// (◯) 连接 AirPlay 音箱…               ← system AirPlay menu (discovery)
 /// ─────────
 /// 声音设置…                            ← System Settings › Sound
 /// ```
 ///
-/// A popover rather than a `Menu`: a menu cannot carry the explanatory hint
-/// for the empty AirPlay section, a two-line row ("系统默认" over the device
+/// A popover rather than a `Menu`: a menu cannot carry a two-line row ("系统默认" over the device
 /// it resolves to) or icon wells, and the player bar already hosts a popover
 /// (`VolumeControl`) without focus or dismissal trouble. Rows are listed
 /// from `AudioOutputDevices.sections`, which only ever contains devices that
@@ -106,6 +106,8 @@ struct OutputDevicePicker: View {
 
     @ObservedObject private var controller = AudioOutputController.shared
     @State private var isPresented = false
+    /// Bumped to open the system AirPlay menu (see `SystemAirPlayMenu`).
+    @State private var airPlayRequest = 0
     @State private var isHovering = false
     @Environment(\.colorScheme) private var colorScheme
 
@@ -122,10 +124,20 @@ struct OutputDevicePicker: View {
         }
         .buttonStyle(.pressable)
         .frame(width: diameter, height: diameter)
+        // Lives here, not in the popover: the popover closes before the menu
+        // opens, and the menu needs a view that is still on screen to anchor to.
+        .background(SystemAirPlayMenu(request: airPlayRequest).allowsHitTesting(false))
         .onHover { isHovering = $0 }
         .animation(AppAnimation.quick, value: isHovering)
         .popover(isPresented: $isPresented, arrowEdge: .top) {
-            OutputDevicePanel(controller: controller) { isPresented = false }
+            OutputDevicePanel(
+                controller: controller,
+                dismiss: { isPresented = false },
+                openAirPlay: {
+                    isPresented = false
+                    controller.expectSystemAirPlayPick()
+                    airPlayRequest += 1
+                })
         }
         .help("输出设备：\(controller.currentDisplayName)")
         .accessibilityLabel("输出设备")
@@ -153,6 +165,7 @@ struct OutputDevicePicker: View {
 private struct OutputDevicePanel: View {
     @ObservedObject var controller: AudioOutputController
     let dismiss: () -> Void
+    let openAirPlay: () -> Void
 
     /// Keyboard highlight only. Hover lives inside each row (see `PanelRow`),
     /// so moving the mouse across the list invalidates one row rather than
@@ -169,6 +182,7 @@ private struct OutputDevicePanel: View {
     enum Row: Hashable {
         case systemDefault
         case device(uid: String)
+        case airPlayDiscovery
         case soundSettings
     }
 
@@ -202,13 +216,8 @@ private struct OutputDevicePanel: View {
                         symbol: device.symbolName,
                         isSelected: controller.selection == .device(uid: device.uid))
                 }
-                if section.group == .airPlay, section.devices.isEmpty {
-                    Text("AirPlay 音箱需先在控制中心或“声音”设置中选择一次，才会出现在这里")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 4)
+                if section.group == .airPlay {
+                    airPlayDiscoveryRow
                 }
             }
 
@@ -289,6 +298,29 @@ private struct OutputDevicePanel: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
+    /// CoreAudio only publishes an AirPlay speaker once macOS has connected
+    /// to it, so a HomePod nobody has picked yet is invisible to the list
+    /// above. This row opens the system AirPlay menu, which does discover
+    /// them; picking one makes it the system output, which "系统默认" follows.
+    private var airPlayDiscoveryRow: some View {
+        PanelRow(isHighlighted: highlighted == .airPlayDiscovery,
+                 onHover: { hover(.airPlayDiscovery, $0) },
+                 action: { pick(.airPlayDiscovery) }) {
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle().fill(Color.primary.opacity(0.1))
+                    Image(systemName: "airplayaudio")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .frame(width: 26, height: 26)
+                Text("连接 AirPlay 音箱…")
+                    .font(.system(size: 13))
+                Spacer(minLength: 8)
+            }
+        }
+        .accessibilityHint("打开系统 AirPlay 菜单，搜索 HomePod 等音箱")
+    }
+
     private var settingsRow: some View {
         PanelRow(isHighlighted: highlighted == .soundSettings,
                  onHover: { hover(.soundSettings, $0) },
@@ -318,7 +350,10 @@ private struct OutputDevicePanel: View {
 
     private func rows(in sections: [AudioOutputSection]) -> [Row] {
         [.systemDefault]
-            + sections.flatMap { $0.devices.map { Row.device(uid: $0.uid) } }
+            + sections.flatMap { section in
+                section.devices.map { Row.device(uid: $0.uid) }
+                    + (section.group == .airPlay ? [.airPlayDiscovery] : [])
+            }
             + [.soundSettings]
     }
 
@@ -357,6 +392,8 @@ private struct OutputDevicePanel: View {
             select(.systemDefault)
         case .device(let uid):
             select(.device(uid: uid))
+        case .airPlayDiscovery:
+            openAirPlay()
         case .soundSettings:
             SoundSettings.open()
         }
@@ -367,6 +404,48 @@ private struct OutputDevicePanel: View {
     private func select(_ selection: AudioOutputSelection) {
         guard selection != controller.selection else { return }
         controller.select(selection)
+    }
+}
+
+/// The system AirPlay menu, opened on demand.
+///
+/// With no `player`, the Mac's `AVRoutePickerView` routes *system* audio —
+/// the same list as Control Centre, discovery included. Kumone's engine
+/// renders to the system output while following "系统默认", so a HomePod
+/// picked here is where playback goes. The view itself is invisible; the
+/// visible affordance is the panel row, which bumps `request`.
+private struct SystemAirPlayMenu: NSViewRepresentable {
+    let request: Int
+
+    final class Coordinator {
+        var request: Int
+        init(request: Int) { self.request = request }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(request: request) }
+
+    func makeNSView(context: Context) -> AVRoutePickerView {
+        let view = AVRoutePickerView()
+        view.isRoutePickerButtonBordered = false
+        view.alphaValue = 0
+        return view
+    }
+
+    func updateNSView(_ view: AVRoutePickerView, context: Context) {
+        guard request != context.coordinator.request else { return }
+        context.coordinator.request = request
+        // After the popover has gone, so the menu is not dismissed with it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            Self.button(in: view)?.performClick(nil)
+        }
+    }
+
+    private static func button(in view: NSView) -> NSButton? {
+        for sub in view.subviews {
+            if let button = sub as? NSButton { return button }
+            if let nested = button(in: sub) { return nested }
+        }
+        return nil
     }
 }
 

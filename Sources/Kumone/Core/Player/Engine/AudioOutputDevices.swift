@@ -202,8 +202,8 @@ enum AudioOutputDevices {
     // MARK: - Picker model (pure)
 
     /// The picker's sections, in display order. Empty sections are dropped,
-    /// except AirPlay: it is always present so the picker has somewhere to
-    /// explain why no receivers are listed (CoreAudio does no discovery).
+    /// except AirPlay: it is always present so the picker can offer AirPlay discovery
+    /// ("连接 AirPlay 音箱…"), which CoreAudio itself does not do.
     static func sections(_ devices: [AudioOutputDevice]) -> [AudioOutputSection] {
         let sorted = ordered(devices)
         return AudioOutputGroup.allCases.compactMap { group in

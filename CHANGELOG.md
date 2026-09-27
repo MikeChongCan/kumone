@@ -7,6 +7,18 @@
 `---` 分隔，随后是完整的**中文**部分（`### 新增` / `### 修复` / `### 改进`）。英文块与中文块
 的条目一一对应、顺序一致。（0.3.19 起采用此双语分块格式；更早的版本沿用旧的中英交替格式。）
 
+## 0.3.23 - 2026-09-26
+
+### Fixed
+
+- **macOS**: HomePod and other AirPlay speakers can now be connected from the player's output picker — a new "Connect AirPlay Speaker…" row opens the system AirPlay menu, which finds speakers macOS hasn't connected to yet, and playback follows the speaker you pick.
+
+---
+
+### 修复
+
+- **macOS**：现在可以从播放器的输出设备选择器连接 HomePod 等 AirPlay 音箱——新增「连接 AirPlay 音箱…」一行，打开系统 AirPlay 菜单，可发现尚未连接过的音箱，选中后播放随之切换过去。
+
 ## 0.3.22 - 2026-09-26
 
 ### Fixed
