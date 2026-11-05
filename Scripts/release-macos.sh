@@ -2,7 +2,7 @@
 # End-to-end macOS release: build → Developer ID sign → notarize → staple →
 # Gatekeeper verification → dist zip → Sparkle appcast → GitHub release.
 #
-# Usage: Scripts/release-macos.sh [all|build|notarize|verify|package|publish]...
+# Usage: Scripts/release-macos.sh [all|build|notarize|verify|package|publish|mirror]...
 #   default: all. Stages run in the listed order; each later stage assumes
 #   the earlier ones already ran (e.g. `verify package publish` re-uses the
 #   stapled app in .build/app).
@@ -12,6 +12,9 @@
 # Optional:
 #   ASC_PROFILE     asc auth profile holding the notary API key (default: rockiestar)
 #   GH_REPO         GitHub repo for the release (default: CatStudioApp/kumone)
+#   MIRROR_REPOS    repos that also get the release, each with its own appcast
+#                   (default: MikeChongCan/kumone; set empty to skip)
+#   MIRROR_GH_USER  gh account that can push to MIRROR_REPOS (default: rockiestar-com)
 #   ARCHES          e.g. "arm64 x86_64" for a universal build (see build-app.sh)
 #
 # Every artifact is verified the way a user's Mac will judge it (staple
@@ -29,6 +32,8 @@ APP_BUNDLE="$ROOT/.build/app/$APP_NAME.app"
 DIST="$ROOT/dist"
 ASC_PROFILE="${ASC_PROFILE:-rockiestar}"
 GH_REPO="${GH_REPO:-CatStudioApp/kumone}"
+MIRROR_REPOS="${MIRROR_REPOS-MikeChongCan/kumone}"
+MIRROR_GH_USER="${MIRROR_GH_USER:-rockiestar-com}"
 FEED_URL="https://github.com/$GH_REPO/releases/latest/download/appcast.xml"
 SPARKLE_BIN="$(find "$ROOT/.build/artifacts" -type d -path '*Sparkle/bin' 2>/dev/null | head -n1)"
 
@@ -108,6 +113,35 @@ stage_verify() {
   verify_app "$APP_BUNDLE"
 }
 
+# fetch_feed <url> <out> — the live appcast, or an empty channel if none yet.
+fetch_feed() {
+  if ! curl -fsSL "$1" -o "$2"; then
+    printf '<?xml version="1.0" standalone="yes"?>\n<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">\n    <channel>\n        <title>%s</title>\n    </channel>\n</rss>\n' "$APP_NAME" > "$2"
+  fi
+}
+
+# merge_appcast <previous> <item_file> <out> — previous feed with this
+# version's item first (an older item for the same version is replaced).
+merge_appcast() {
+  VERSION="$VERSION" PREVIOUS="$1" ITEM_FILE="$2" OUT="$3" python3 - <<'PY'
+import os, re
+prev = open(os.environ["PREVIOUS"], encoding="utf-8").read()
+item = open(os.environ["ITEM_FILE"], encoding="utf-8").read()
+ver = os.environ["VERSION"]
+# Drop any earlier item for this same version (re-release), then insert the new one first.
+prev = re.sub(r"\s*<item>(?:(?!</item>).)*?<title>%s</title>.*?</item>" % re.escape(ver), "", prev, flags=re.S)
+head, sep, tail = prev.partition("<channel>")
+if not sep:
+    raise SystemExit("appcast: no <channel> element")
+title_end = tail.find("</title>")
+if title_end == -1:
+    raise SystemExit("appcast: channel has no <title>")
+insert_at = title_end + len("</title>")
+tail = tail[:insert_at] + "\n" + item.rstrip("\n") + tail[insert_at:]
+open(os.environ["OUT"], "w", encoding="utf-8").write(head + sep + tail)
+PY
+}
+
 stage_package() {
   log "Packaging $ZIP"
   mkdir -p "$DIST"
@@ -146,26 +180,8 @@ stage_package() {
 ITEM
   # Keep the previously published items so older installs still get an update path.
   local previous="$ROOT/.build/appcast-previous.xml"
-  if ! curl -fsSL "$FEED_URL" -o "$previous"; then
-    printf '<?xml version="1.0" standalone="yes"?>\n<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">\n    <channel>\n        <title>%s</title>\n    </channel>\n</rss>\n' "$APP_NAME" > "$previous"
-  fi
-  VERSION="$VERSION" ITEM_FILE="$item_file" PREVIOUS="$previous" OUT="$APPCAST" python3 - <<'PY'
-import os, re
-prev = open(os.environ["PREVIOUS"], encoding="utf-8").read()
-item = open(os.environ["ITEM_FILE"], encoding="utf-8").read()
-ver = os.environ["VERSION"]
-# Drop any earlier item for this same version (re-release), then insert the new one first.
-prev = re.sub(r"\s*<item>(?:(?!</item>).)*?<title>%s</title>.*?</item>" % re.escape(ver), "", prev, flags=re.S)
-head, sep, tail = prev.partition("<channel>")
-if not sep:
-    raise SystemExit("appcast: no <channel> element")
-title_end = tail.find("</title>")
-if title_end == -1:
-    raise SystemExit("appcast: channel has no <title>")
-insert_at = title_end + len("</title>")
-tail = tail[:insert_at] + "\n" + item.rstrip("\n") + tail[insert_at:]
-open(os.environ["OUT"], "w", encoding="utf-8").write(head + sep + tail)
-PY
+  fetch_feed "$FEED_URL" "$previous"
+  merge_appcast "$previous" "$item_file" "$APPCAST"
   xmllint --noout "$APPCAST"
   grep -q "releases/download/v$VERSION/$APP_NAME-$VERSION.zip" "$APPCAST"
   echo "appcast: $APPCAST"
@@ -184,25 +200,72 @@ stage_publish() {
     gh release create "v$VERSION" "$ZIP" "$APPCAST" --repo "$GH_REPO" \
       --title "v$VERSION" --notes-file "$notes" --latest
   fi
-  log "Checking the live feed"
-  # GitHub's releases/latest redirect can lag a new release by a minute.
+  wait_for_feed "$FEED_URL"
+  echo "https://github.com/$GH_REPO/releases/tag/v$VERSION"
+}
+
+# wait_for_feed <url> — GitHub's releases/latest redirect can lag a new
+# release by a minute; poll for up to 3 minutes.
+wait_for_feed() {
+  log "Checking the live feed $1"
   local attempt
   for attempt in 1 2 3 4 5 6; do
-    if curl -fsSL "$FEED_URL" | grep -q "<sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>"; then
-      echo "live appcast lists $VERSION"; break
+    if curl -fsSL "$1" | grep -q "<sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>"; then
+      echo "live appcast lists $VERSION"; return 0
     fi
-    [ "$attempt" -lt 6 ] || { echo "error: live appcast does not list $VERSION after 3 minutes" >&2; exit 1; }
+    [ "$attempt" -lt 6 ] || { echo "error: live appcast $1 does not list $VERSION after 3 minutes" >&2; exit 1; }
     sleep 30
   done
-  echo "https://github.com/$GH_REPO/releases/tag/v$VERSION"
+}
+
+# Installs up to 0.3.23 were built with the MikeChongCan/kumone feed and
+# update check, so every release is mirrored there too: the same notarized
+# zip, plus that repo's own appcast (its previous items kept) with this
+# version's item pointing at its copy of the zip. Pushing there needs a
+# different gh account than GH_REPO (MIRROR_GH_USER).
+stage_mirror() {
+  [ -n "$MIRROR_REPOS" ] || { echo "MIRROR_REPOS empty; skipping mirror"; return 0; }
+  [ -f "$ZIP" ] && [ -f "$APPCAST" ] || { echo "error: run the package stage first" >&2; exit 1; }
+  local notes="$ROOT/.build/release-notes-$VERSION.md"
+  "$SCRIPT_DIR/release-notes.sh" "$VERSION" > "$notes"
+  local item_file="$ROOT/.build/appcast-item.xml"
+  VERSION="$VERSION" APPCAST="$APPCAST" OUT="$item_file" python3 - <<'PY'
+import os, re
+feed = open(os.environ["APPCAST"], encoding="utf-8").read()
+m = re.search(r"[ \t]*<item>(?:(?!</item>).)*?<title>%s</title>.*?</item>" % re.escape(os.environ["VERSION"]), feed, flags=re.S)
+if not m:
+    raise SystemExit("appcast: no item for this version")
+open(os.environ["OUT"], "w", encoding="utf-8").write(m.group(0) + "\n")
+PY
+  local token repo dir feed
+  token="$(gh auth token -u "$MIRROR_GH_USER")"
+  for repo in $MIRROR_REPOS; do
+    log "Mirroring v$VERSION to $repo (as $MIRROR_GH_USER)"
+    dir="$ROOT/.build/mirror/${repo//\//_}"
+    rm -rf "$dir"; mkdir -p "$dir"
+    sed "s#https://github.com/$GH_REPO/releases/download/#https://github.com/$repo/releases/download/#" "$item_file" > "$dir/item.xml"
+    grep -q "https://github.com/$repo/releases/download/v$VERSION/$APP_NAME-$VERSION.zip" "$dir/item.xml"
+    feed="https://github.com/$repo/releases/latest/download/appcast.xml"
+    fetch_feed "$feed" "$dir/previous.xml"
+    merge_appcast "$dir/previous.xml" "$dir/item.xml" "$dir/appcast.xml"
+    xmllint --noout "$dir/appcast.xml"
+    if GH_TOKEN="$token" gh release view "v$VERSION" --repo "$repo" >/dev/null 2>&1; then
+      GH_TOKEN="$token" gh release upload "v$VERSION" "$ZIP" "$dir/appcast.xml" --repo "$repo" --clobber
+    else
+      GH_TOKEN="$token" gh release create "v$VERSION" "$ZIP" "$dir/appcast.xml" --repo "$repo" \
+        --title "v$VERSION" --notes-file "$notes" --latest
+    fi
+    wait_for_feed "$feed"
+    echo "https://github.com/$repo/releases/tag/v$VERSION"
+  done
 }
 
 STAGES=("$@")
 [ "${#STAGES[@]}" -eq 0 ] && STAGES=(all)
 for stage in "${STAGES[@]}"; do
   case "$stage" in
-    all) stage_build; stage_notarize; stage_verify; stage_package; stage_publish ;;
-    build|notarize|verify|package|publish) "stage_$stage" ;;
-    *) echo "usage: $0 [all|build|notarize|verify|package|publish]..." >&2; exit 2 ;;
+    all) stage_build; stage_notarize; stage_verify; stage_package; stage_publish; stage_mirror ;;
+    build|notarize|verify|package|publish|mirror) "stage_$stage" ;;
+    *) echo "usage: $0 [all|build|notarize|verify|package|publish|mirror]..." >&2; exit 2 ;;
   esac
 done
