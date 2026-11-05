@@ -17,7 +17,7 @@ public struct KumoneApp: App {
 
     public var body: some Scene {
         Window("网易云小乐", id: "main") {
-            MainWindow()
+            UpstreamGate { MainWindow() }
                 .environmentObject(player)
                 .environmentObject(account)
                 .environmentObject(settings)

@@ -10,3 +10,5 @@ DerivedData/
 ios/Config/CarPlay.local.xcconfig
 ios/Config/Generated/
 dist/
+# Per-machine TestFlight signing (team ID); see ios/Config/TestFlight.xcconfig
+ios/Config/TestFlight.local.xcconfig

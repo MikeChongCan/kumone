@@ -35,6 +35,7 @@ struct TrackRow: View {
     @EnvironmentObject private var account: AccountStore
     @Environment(\.openDestination) private var openDestination
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @ScaledMetric(relativeTo: .body) private var compactArtworkSize: CGFloat = 48
     @ScaledMetric(relativeTo: .body) private var compactRowHeight: CGFloat = 64
     @ScaledMetric(relativeTo: .body) private var compactAlbumRowHeight: CGFloat = 50
@@ -80,7 +81,8 @@ struct TrackRow: View {
 
     private var isCompact: Bool {
         #if os(iOS)
-        return UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact
+        return LayoutSizeClass.isCompact(horizontal: horizontalSizeClass, vertical: verticalSizeClass,
+                                         fallback: UIDevice.current.userInterfaceIdiom == .phone)
         #else
         return false
         #endif
@@ -356,7 +358,7 @@ struct TrackRow: View {
             Button("从歌单中删除", role: .destructive) {
                 Task {
                     do {
-                        try await NeteaseAPI.playlistTracks(op: "del", playlistID: pid, trackIDs: [track.id])
+                        try await MusicAPI.playlistTracks(op: "del", playlistID: pid, trackIDs: [track.id])
                         onRemoved?()
                         ToastCenter.shared.show(String(localized: "已从歌单中删除"))
                     } catch {
@@ -374,7 +376,7 @@ struct TrackRow: View {
                 Task {
                     defer { reducingRecommendationIDs.remove(trackID) }
                     do {
-                        let replacement = try await NeteaseAPI.dislikeRecommendedSong(id: track.id)
+                        let replacement = try await MusicAPI.dislikeRecommendedSong(id: track.id)
                         onRecommendationReduced(replacement)
                         ToastCenter.shared.show(String(localized: "已减少推荐"))
                     } catch {
@@ -398,7 +400,7 @@ struct TrackRow: View {
         }
         Divider()
         Button("复制链接") {
-            Platform.copyToPasteboard(string: "https://music.163.com/#/song?id=\(track.id)")
+            Platform.copyToPasteboard(string: Upstream.songPageURL(id: track.id)?.absoluteString ?? "")
             ToastCenter.shared.show(String(localized: "链接已复制"))
         }
     }
@@ -767,7 +769,7 @@ struct AddToPlaylistSheet: View {
     private func add(to playlist: PlaylistSummary) {
         Task {
             do {
-                try await NeteaseAPI.playlistTracks(op: "add", playlistID: playlist.id, trackIDs: [track.id])
+                try await MusicAPI.playlistTracks(op: "add", playlistID: playlist.id, trackIDs: [track.id])
                 ToastCenter.shared.show(String(localized: "已收藏到「\(playlist.name)」"))
                 await account.refreshLibrary()
                 dismiss()
@@ -784,8 +786,8 @@ struct AddToPlaylistSheet: View {
         Task {
             defer { creating = false }
             do {
-                if let id = try await NeteaseAPI.createPlaylist(name: name, isPrivate: false) {
-                    try await NeteaseAPI.playlistTracks(op: "add", playlistID: id, trackIDs: [track.id])
+                if let id = try await MusicAPI.createPlaylist(name: name, isPrivate: false) {
+                    try await MusicAPI.playlistTracks(op: "add", playlistID: id, trackIDs: [track.id])
                     ToastCenter.shared.show(String(localized: "已收藏到「\(name)」"))
                     await account.refreshLibrary()
                     dismiss()

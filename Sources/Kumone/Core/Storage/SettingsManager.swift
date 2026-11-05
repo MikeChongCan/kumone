@@ -87,6 +87,28 @@ public enum NowPlayingMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// Layout used by the full-width now-playing page — iPhone landscape and
+/// iPad — where `NowPlayingMode`'s compact layouts no longer apply. Kept
+/// separate so a phone in portrait can stay on 黑胶 while landscape opens on
+/// a lyrics-first page.
+public enum LandscapeNowPlayingStyle: String, CaseIterable, Identifiable {
+    /// Artwork and transport on the left, lyrics on the right (the original
+    /// full-width page).
+    case classic
+    /// Lyrics fill the page, with a small header and a floating transport
+    /// capsule at the bottom.
+    case immersive
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .classic: return String(localized: "经典双栏")
+        case .immersive: return String(localized: "沉浸歌词")
+        }
+    }
+}
+
 @MainActor
 final class SettingsManager: ObservableObject {
     static let shared = SettingsManager()
@@ -98,6 +120,7 @@ final class SettingsManager: ObservableObject {
         static let quality = "settings.audioQuality"
         static let appearance = "settings.appearance"
         static let nowPlayingMode = "settings.nowPlayingMode"
+        static let landscapeNowPlayingStyle = "settings.landscapeNowPlayingStyle"
         static let openAlbumOnArtworkClick = "settings.openAlbumOnArtworkClick"
         static let showTranslation = "settings.showLyricsTranslation"
         static let showRomaji = "settings.showLyricsRomaji"  // migrated to `annotation`
@@ -176,6 +199,14 @@ final class SettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(nowPlayingMode.rawValue, forKey: Keys.nowPlayingMode) }
     }
 
+    @Published var landscapeNowPlayingStyle: LandscapeNowPlayingStyle {
+        didSet {
+            UserDefaults.standard.set(
+                landscapeNowPlayingStyle.rawValue, forKey: Keys.landscapeNowPlayingStyle
+            )
+        }
+    }
+
     @Published var openAlbumOnArtworkClick: Bool {
         didSet { UserDefaults.standard.set(openAlbumOnArtworkClick, forKey: Keys.openAlbumOnArtworkClick) }
     }
@@ -201,14 +232,14 @@ final class SettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(lyricsAnnotation.rawValue, forKey: Keys.annotation) }
     }
 
-    /// Karaoke-style word-by-word highlighting: NetEase's own timing when the
+    /// Karaoke-style word-by-word highlighting: the service's own timing when the
     /// song has verbatim (yrc) lyrics, else the line's time spread across its
     /// characters.
     @Published var verbatimLyrics: Bool {
         didSet { UserDefaults.standard.set(verbatimLyrics, forKey: Keys.verbatimLyrics) }
     }
 
-    /// Resolve gray tracks from third-party sources (UnblockNeteaseMusic-style).
+    /// Resolve gray tracks from third-party sources (unblock-style).
     @Published var enableUnblock: Bool {
         didSet { UserDefaults.standard.set(enableUnblock, forKey: Keys.unblock) }
     }
@@ -340,6 +371,8 @@ final class SettingsManager: ObservableObject {
         defaults.set(normalizedAudioCacheSizeMB, forKey: Keys.audioCacheSizeMB)
         appearance = defaults.string(forKey: Keys.appearance).flatMap(AppAppearance.init) ?? .auto
         nowPlayingMode = defaults.string(forKey: Keys.nowPlayingMode).flatMap(NowPlayingMode.init) ?? .immersive
+        landscapeNowPlayingStyle = defaults.string(forKey: Keys.landscapeNowPlayingStyle)
+            .flatMap(LandscapeNowPlayingStyle.init) ?? .classic
         openAlbumOnArtworkClick = defaults.object(forKey: Keys.openAlbumOnArtworkClick) as? Bool ?? true
         showLyricsTranslation = defaults.object(forKey: Keys.showTranslation) as? Bool ?? true
         // Carry over the old on/off romaji toggle for anyone who had it on.

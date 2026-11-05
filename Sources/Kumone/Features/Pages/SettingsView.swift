@@ -108,6 +108,14 @@ struct SettingsView: View {
                         Text(mode.displayName).tag(mode)
                     }
                 }
+                Picker("横屏播放页样式", selection: $settings.landscapeNowPlayingStyle) {
+                    ForEach(LandscapeNowPlayingStyle.allCases) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+                Text("iPhone 横放或 iPad 打开播放页时使用；竖屏仍按上面的「播放页模式」")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 #endif
                 Toggle("点击封面打开专辑", isOn: $settings.openAlbumOnArtworkClick)
                 Toggle("显示歌词翻译", isOn: $settings.showLyricsTranslation)
@@ -186,28 +194,44 @@ struct SettingsView: View {
                 }
             }
 
-            Section("更新") {
-                Toggle("启动时自动检查更新", isOn: $settings.autoCheckUpdates)
-                Text("关闭后启动不再自动弹出更新提示，仍可手动检查更新")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            if showsUpdateControls {
+                Section("更新") {
+                    Toggle("启动时自动检查更新", isOn: $settings.autoCheckUpdates)
+                    Text("关闭后启动不再自动弹出更新提示，仍可手动检查更新")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    #if os(iOS)
+                    if DistributionChannel.current == .sideload {
+                        Button {
+                            IOSUpdater.shared.check(interactive: true)
+                        } label: {
+                            Label("检查更新", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        Text("装有 TrollStore（巨魔）可在应用内一键自动安装；否则可下载 IPA 用侧载工具重装（登录状态与设置保留）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    #endif
+                }
             }
 
-            Section("关于") {
-                LabeledContent("网易云小乐", value: appVersion)
-                #if os(iOS)
-                Button {
-                    IOSUpdater.shared.check(interactive: true)
-                } label: {
-                    Label("检查更新", systemImage: "arrow.triangle.2.circlepath")
+            Section {
+                VStack(spacing: 2) {
+                    Text("网易云小乐")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text(appVersionAndBuild)
+                        .font(.caption2)
+                        .monospacedDigit()
+                        .foregroundStyle(.tertiary)
                 }
-                Text("装有 TrollStore（巨魔）可在应用内一键自动安装；否则可下载 IPA 用侧载工具重装（登录状态与设置保留）")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                #endif
-                Text("网易云音乐第三方客户端 · 数据来自网易云音乐")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 24)
+                .padding(.bottom, 32)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(appVersionAccessibilityLabel)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
             }
         }
         .formStyle(.grouped)
@@ -242,8 +266,34 @@ struct SettingsView: View {
         }
     }
 
+    /// Sparkle on macOS; on iOS only sideload builds carry an updater.
+    private var showsUpdateControls: Bool {
+        #if os(iOS)
+        return DistributionChannel.current.allowsSelfUpdate
+        #else
+        return true
+        #endif
+    }
+
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+    }
+
+    private var appBuild: String? {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String
+    }
+
+    /// "0.1.0 (2)": version, then build in brackets, both read from the bundle.
+    private var appVersionAndBuild: String {
+        guard let build = appBuild, !build.isEmpty else { return appVersion }
+        return "\(appVersion) (\(build))"
+    }
+
+    private var appVersionAccessibilityLabel: String {
+        if let build = appBuild, !build.isEmpty {
+            return "网易云小乐, version \(appVersion), build \(build)"
+        }
+        return "网易云小乐, version \(appVersion)"
     }
 
 }

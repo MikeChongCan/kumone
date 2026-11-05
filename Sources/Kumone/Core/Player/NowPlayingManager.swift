@@ -1,3 +1,4 @@
+import AVFoundation
 import Combine
 import Foundation
 import MediaPlayer
@@ -11,13 +12,101 @@ final class NowPlayingManager {
     private var artworkTask: Task<Void, Never>?
     private var playbackStateCancellables: Set<AnyCancellable> = []
     private var info: [String: Any] = [:]
+    #if os(iOS)
+    /// Binds the app's Now Playing state to its AVPlayer. The system's Now
+    /// Playing / lock-screen / Dynamic Island surface launches the app behind
+    /// the session on a tap; publishing through the process-wide centers
+    /// leaves that association implicit. `MPNowPlayingSession` is the iOS 16+
+    /// API for it (macOS has no equivalent). This is the client-side
+    /// hardening for #124/#40 — the launch itself is still controlled by the
+    /// system and the installed app's signing identity.
+    private var session: MPNowPlayingSession?
+    #endif
+
+    /// Where metadata is published. With a session this must be the session's
+    /// own center — the default center is not associated with it.
+    private var infoCenter: MPNowPlayingInfoCenter {
+        #if os(iOS)
+        if let session { return session.nowPlayingInfoCenter }
+        #endif
+        return .default()
+    }
+
+    /// Where remote commands are registered. The session owns its own
+    /// command center; registering on `.shared()` would leave those commands
+    /// outside the session.
+    private var commandCenter: MPRemoteCommandCenter {
+        #if os(iOS)
+        if let session { return session.remoteCommandCenter }
+        #endif
+        return .shared()
+    }
 
     private init() {}
 
-    func attach(to player: PlayerService) {
+    #if os(iOS)
+    private var activationAttemptInFlight = false
+    private var lastActivationAttempt: Date = .distantPast
+    /// `updateElapsed` ticks several times a second; activation is retried
+    /// no more often than this.
+    private static let activationRetryInterval: TimeInterval = 2
+
+    /// Claims the session again when it has lost its active slot (another app
+    /// took Now Playing while we were paused). While audio is audibly playing
+    /// a refusal means this install cannot activate a session at all, which
+    /// happens with some re-signed builds; the shared centers then take over
+    /// so the lock screen and Control Center keep their controls.
+    private func reclaimSessionIfNeeded(whilePlaying playing: Bool) {
+        guard let session, !session.isActive, !activationAttemptInFlight,
+              Date().timeIntervalSince(lastActivationAttempt) >= Self.activationRetryInterval
+        else { return }
+        activationAttemptInFlight = true
+        lastActivationAttempt = Date()
+        session.becomeActiveIfPossible { [weak self] success in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.activationAttemptInFlight = false
+                if !success, playing { self.fallBackToSharedCenters() }
+            }
+        }
+    }
+
+    /// Gives up the session: commands move to `MPRemoteCommandCenter.shared()`
+    /// and the current metadata is republished on the default info center.
+    private func fallBackToSharedCenters() {
+        guard session != nil, let player else { return }
+        session = nil
+        registerRemoteCommands(for: player)
+        let rate = info[MPNowPlayingInfoPropertyPlaybackRate] as? Double ?? 0
+        infoCenter.nowPlayingInfo = info.isEmpty ? nil : info
+        infoCenter.playbackState = info.isEmpty ? .stopped : (rate > 0 ? .playing : .paused)
+        refreshLikeState()
+    }
+    #endif
+
+    /// - Parameter avPlayer: the iOS AVPlayer backing playback. When supplied,
+    ///   the Now Playing session is bound to it so the system can identify the
+    ///   app behind the session.
+    func attach(to player: PlayerService, avPlayer: AVPlayer? = nil) {
         self.player = player
+        #if os(iOS)
+        if let avPlayer {
+            let session = MPNowPlayingSession(players: [avPlayer])
+            // We publish the full dictionary ourselves (elapsed time, queue
+            // count, artwork), which the automatic publisher would omit.
+            session.automaticallyPublishesNowPlayingInfo = false
+            self.session = session
+            session.becomeActiveIfPossible { _ in }
+        }
+        #endif
+        registerRemoteCommands(for: player)
+    }
+
+    /// Registers the remote commands on the current command center. Run again
+    /// when that center changes, i.e. when the session is given up.
+    private func registerRemoteCommands(for player: PlayerService) {
         playbackStateCancellables.removeAll()
-        let center = MPRemoteCommandCenter.shared()
+        let center = commandCenter
 
         center.playCommand.addTarget { [weak player] _ in
             guard let player, player.hasCurrentTrack else { return .noActionableNowPlayingItem }
@@ -124,14 +213,20 @@ final class NowPlayingManager {
     /// Reflects the current track's hearted state on the like command.
     func refreshLikeState() {
         guard let track = player?.currentTrack else {
-            MPRemoteCommandCenter.shared().likeCommand.isActive = false
+            commandCenter.likeCommand.isActive = false
             return
         }
-        MPRemoteCommandCenter.shared().likeCommand.isActive =
+        commandCenter.likeCommand.isActive =
             AccountStore.shared.isLiked(track.id)
     }
 
     func updateMetadata(for track: Track, duration: TimeInterval) {
+        #if os(iOS)
+        // A session can lose its active slot while playback was stopped;
+        // claim it again as soon as a new track is put up. The player may not
+        // be audible yet, so a refusal here is not held against the session.
+        reclaimSessionIfNeeded(whilePlaying: false)
+        #endif
         info = [
             MPMediaItemPropertyTitle: track.name,
             MPMediaItemPropertyArtist: track.artistNames,
@@ -143,8 +238,8 @@ final class NowPlayingManager {
             // complete now-playing app (best-effort hardening for #36/#40).
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
         ]
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        MPNowPlayingInfoCenter.default().playbackState = .playing
+        infoCenter.nowPlayingInfo = info
+        infoCenter.playbackState = .playing
         refreshLikeState()
 
         artworkTask?.cancel()
@@ -156,7 +251,7 @@ final class NowPlayingManager {
                 guard let self, !Task.isCancelled else { return }
                 let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
                 self.info[MPMediaItemPropertyArtwork] = artwork
-                MPNowPlayingInfoCenter.default().nowPlayingInfo = self.info
+                self.infoCenter.nowPlayingInfo = self.info
             }
             if let image = await ImageCache.shared.image(for: url, onCachedImage: apply) {
                 apply(image)
@@ -165,18 +260,22 @@ final class NowPlayingManager {
     }
 
     func updateElapsed(_ elapsed: TimeInterval, rate: Double) {
+        #if os(iOS)
+        // Resuming the same track publishes through here, not updateMetadata.
+        if rate > 0 { reclaimSessionIfNeeded(whilePlaying: true) }
+        #endif
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed
         info[MPNowPlayingInfoPropertyPlaybackRate] = rate
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        MPNowPlayingInfoCenter.default().playbackState = rate > 0 ? .playing : .paused
+        infoCenter.nowPlayingInfo = info
+        infoCenter.playbackState = rate > 0 ? .playing : .paused
     }
 
     func clear() {
         artworkTask?.cancel()
         artworkTask = nil
         info = [:]
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        MPNowPlayingInfoCenter.default().playbackState = .stopped
-        MPRemoteCommandCenter.shared().likeCommand.isActive = false
+        infoCenter.nowPlayingInfo = nil
+        infoCenter.playbackState = .stopped
+        commandCenter.likeCommand.isActive = false
     }
 }

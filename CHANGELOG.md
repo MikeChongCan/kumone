@@ -17,6 +17,13 @@
 - **iOS + macOS**: iCloud sync (off by default) — continue playback where another device left off, keep settings in sync, and optionally share your sign-in between devices through iCloud Drive or a folder you choose. Shared sign-ins are encrypted with a sync password you set, and signing out revokes the session once no other device is using it. Thanks @yamakze (#138).
 - **iOS + macOS**: a setting to stop the now-playing artwork from opening the album when clicked — Settings → 点击封面打开专辑, on by default. Thanks @danielzmeow (#144, closes #143).
 - **iOS + macOS**: word-by-word lyrics now run for every song — when NetEase has no verbatim timing for a track, the line's time is spread across its characters (the way mygo-cloudmusic does it), so the karaoke wipe no longer falls back to plain line highlighting. Punctuation and spaces light up with the character before them instead of taking singing time of their own.
+- **iOS + macOS**: a short first-launch check — answer two simple arithmetic questions to get started.
+- **macOS**: desktop lyrics now sing along — with 逐字歌词（卡拉OK） on, the floating line lights up character by character from the song's word timings, the same wipe as the now-playing page; it freezes while paused and keeps running with the main window hidden (#174).
+- **iOS + macOS**: a new app icon — a geometric K monogram in white on the app's vermilion accent, drawn as an Icon Composer bundle so macOS 26 renders it with the system's glass treatment (#173).
+- **macOS**: a native menu bar player — cover, title, artist, elapsed time and a like button, with play/pause, previous, next and Settings in its overflow menu. Off by default; turn it on under Settings → 通用 → 在菜单栏显示. Thanks @yamakze (#155, closes #132).
+- **iOS**: a landscape "immersive lyrics" (karaoke) player style — centred word-by-word lyrics on a slowly drifting blurred-cover backdrop, with the track info bottom-left and the transport bottom-right; pick it under Settings → 外观 → 横屏播放页样式 (defaults to the classic two-column layout). Thanks @yxxbc (#167).
+- **iOS**: iPhone Duo support — track rows and the album/artist pages follow the inner display's regular size classes, and shelves stop at the trailing status-bar column instead of drawing into it (#170).
+- **iOS**: a TestFlight build configuration (`make testflight`); TestFlight and App Store builds skip the launch-time update check and the TrollStore / IPA update controls in Settings (#172).
 
 ### Fixed
 
@@ -32,6 +39,11 @@
 - **iOS + macOS**: the English settings page no longer shows untranslated labels for the now-playing mode, ambient colour, desktop lyrics and update options. Thanks @danielzmeow (#145).
 - **iOS + macOS**: liking a song no longer fails with "当前环境异常，已取消喜欢" — the like, removing a song from Personal FM and song details now go through NetEase's desktop-client API as a device that stays the same across launches, the way mygo-cloudmusic does it (#81).
 - **iOS**: the mini player briefly lost its layout after leaving the Now Playing screen — the accessory placement reads nil for a few seconds while the zoom transition returns it to the tab bar, and the last reported placement is now kept through that interval.
+- **iOS + macOS**: editing a search query and searching the previous text again no longer shows an empty "没有找到相关结果" — responses for an older query are dropped, loading is tracked per tab, and a failed request is retried on the next submit instead of being cached as empty (#162, fixes #159).
+- **macOS**: the search field inside a playlist (e.g. 我喜欢的音乐) no longer loses focus after every typed or deleted character — filtering now refreshes the song rows instead of reloading the whole table. Based on the analysis by @menglongyanyu (#156, fixes #142).
+- **iOS**: tapping the Dynamic Island / system Now Playing brings the app to the foreground more reliably — playback now runs under an `MPNowPlayingSession` bound to the player, re-claimed on resume; installs that cannot activate a session fall back to the shared Now Playing centers so lock-screen and Control Center controls still appear. Thanks @yxxbc (#167, #171; #40, #124).
+- **iOS**: the bottom transport buttons no longer shift sideways for a moment when the track changes, and old and new lyrics no longer cross-fade on top of each other (#167, #171).
+- **macOS**: the CoreAudio overload callback is now delivered asynchronously, removing a rare deadlock while the audio engine is torn down or restarted. Thanks @yamakze (#153).
 
 ### Improved
 
@@ -41,6 +53,13 @@
 - **macOS**: on macOS 26 and later the app now uses the current system window style. Thanks @yxxbc (#130).
 - **iOS + macOS**: every desktop-client request — playback URLs, downloads, search, charts — now identifies this install with a device ID made once and kept, instead of a constant every install shared, which NetEase's risk control had started to refuse.
 - **iOS + macOS**: every request is now routed through NetEase's eapi as the desktop client, as mygo-cloudmusic does; phone-number login and following an artist answer -460 (检测到您的网络环境存在风险) through the eapi, so those calls and the SMS code go through the plain web API, and the QR login uses type 3 with the /nuser/account/get account lookup, as the desktop client does.
+- **iOS + macOS**: sign-in, recommendation and library screens no longer name a specific service — the QR sign-in now just says to scan with the official app.
+- **macOS**: the About window credits MOE AI LLC.
+- **macOS**: the app is about 57% smaller (bundle 205 → 88 MB) — the ~107 MB Metal kernels for stem separation ship compressed and are unpacked on first use, and release builds strip local symbols with the dSYM kept for crash symbolication. Thanks @yamakze (#153).
+- **macOS**: progressive playback no longer keeps the not-yet-decoded part of a download in memory — it is read back from the on-disk cache mirror in 32 KiB chunks, so peak memory stays flat regardless of file size. Thanks @yamakze (#164, #161).
+- **macOS**: switching tracks quickly cancels the previous track's source resolution, lyrics, prefetch download and analysis instead of letting them finish in the background; a shared download is only cancelled once its last consumer leaves. Thanks @yamakze (#165, #161).
+- **macOS**: with AutoMix off, the next track is no longer prefetched and analysed during plain playback; turning AutoMix on resumes the preparation. Thanks @yamakze (#166, #161).
+- **iOS**: tighter browsing pages — less space between sections and between a section title and its cards, single-line shelf titles, and no blank band under each shelf (#170).
 
 ---
 
@@ -52,6 +71,13 @@
 - **iOS + macOS**：iCloud 同步(默认关闭)——在另一台设备上接续播放、同步设置,并可通过 iCloud 云盘或自选文件夹在设备间共享登录。共享的登录信息以你设置的同步密码加密,退出登录时若已没有其他设备在用该会话,会一并注销。感谢 @yamakze（#138）。
 - **iOS + macOS**：新增「点击封面打开专辑」开关（设置 → 播放页），默认开启；关闭后播放页点击封面不再跳转到专辑。感谢 @danielzmeow（#144，关闭 #143）。
 - **iOS + macOS**：逐字歌词覆盖所有歌曲——网易云没有提供逐字时间轴的歌曲，参照 mygo-cloudmusic 的做法把每行时长按字分摊，卡拉OK 式逐字点亮不再退回整行高亮；标点和空格不再占用演唱时间，跟随前一个字点亮。
+- **iOS + macOS**：首次启动新增一个小验证——答对两道简单的算术题即可开始使用。
+- **macOS**：桌面歌词支持逐字卡拉 OK——开启「逐字歌词（卡拉OK）」后，悬浮歌词按歌曲的逐字时间逐个亮起，与播放页同一套扫光；暂停时停住，主窗口隐藏时照常运行（#174）。
+- **iOS + macOS**：全新 App 图标——朱红底色上的白色几何 K 字母，以 Icon Composer 包提供，macOS 26 会用系统玻璃效果渲染（#173）。
+- **macOS**：原生菜单栏播放器——封面、歌名、歌手、播放时间和喜欢按钮，播放/暂停、上一首、下一首与设置入口收纳在更多菜单中。默认关闭，在 设置 → 通用 → 在菜单栏显示 开启。感谢 @yamakze（#155，关闭 #132）。
+- **iOS**：横屏「沉浸歌词（卡拉 OK）」播放页样式——逐字扫光的歌词居中显示，背景是缓慢漂移的模糊封面，左下角曲目信息、右下角播放控制；在 设置 → 外观 → 横屏播放页样式 中选择（默认仍为经典双栏）。感谢 @yxxbc（#167）。
+- **iOS**：适配 iPhone Duo——歌曲行和专辑、歌手页面按内屏的 regular 尺寸类布局，推荐栏在右侧状态栏列处截止，不再画进去（#170）。
+- **iOS**：新增 TestFlight 构建配置（`make testflight`）；TestFlight 与 App Store 版本不再在启动时检查更新，设置里也不再显示 TrollStore / IPA 更新入口（#172）。
 
 ### 修复
 
@@ -67,6 +93,11 @@
 - **iOS + macOS**：英文界面的设置页补齐了播放页模式、环境色、桌面歌词、更新等选项的翻译。感谢 @danielzmeow（#145）。
 - **iOS + macOS**：点击喜欢不再提示「当前环境异常，已取消喜欢」——喜欢、私人漫游中移除歌曲和歌曲详情改走网易云桌面客户端接口，并以每次启动都相同的设备 ID 发送请求，参照 mygo-cloudmusic 的做法（#81）。
 - **iOS**：从正在播放页面返回后，迷你播放器会短暂丢失布局——缩放过渡回到标签栏的几秒内 accessory 位置读取为 nil，现在这段时间内保留上一次上报的位置。
+- **iOS + macOS**：修改搜索词后再搜回之前的文本不再显示空的「没有找到相关结果」——旧搜索词的响应会被丢弃，加载状态按标签页分别记录，失败的请求下次提交时会重试而不是被当作空结果缓存（#162，修复 #159）。
+- **macOS**：歌单内（如 我喜欢的音乐）的搜索框不再每输入或删除一个字符就失去焦点——过滤时只刷新歌曲行而不再整表重载。基于 @menglongyanyu 的分析（#156，修复 #142）。
+- **iOS**：点击灵动岛 / 系统正在播放更可靠地把 App 拉回前台——播放现在挂在绑定到播放器的 `MPNowPlayingSession` 下，恢复播放时会重新声明；无法激活会话的安装会回退到共享的正在播放中心，锁屏和控制中心的控制按钮仍会出现。感谢 @yxxbc（#167、#171；#40、#124）。
+- **iOS**：换歌瞬间底部控制按钮不再横向跳动，新旧歌词也不再交叉淡入淡出叠在一起（#167、#171）。
+- **macOS**：CoreAudio 过载回调改为异步投递，消除音频引擎销毁或重启时偶发的死锁。感谢 @yamakze（#153）。
 
 ### 改进
 
@@ -76,6 +107,13 @@
 - **macOS**：在 macOS 26 及以上版本,应用改用当前的系统窗口样式。感谢 @yxxbc（#130）。
 - **iOS + macOS**：所有桌面客户端接口（播放地址、下载、搜索、排行榜）改用安装时生成并持久保存的设备 ID，不再所有用户共用同一个标识——网易云风控已开始拒绝这种请求。
 - **iOS + macOS**：所有请求改走网易云的 eapi 并以桌面客户端身份发送，参照 mygo-cloudmusic 的做法；手机号登录和关注歌手在 eapi 下返回 -460（检测到您的网络环境存在风险），这几个调用和短信验证码改走普通 Web API，扫码登录改用 type 3 并通过 /nuser/account/get 查询账号，与桌面客户端一致。
+- **iOS + macOS**：登录、推荐和资料库页面不再出现具体服务的名称，扫码登录改为提示用官方 App 扫码。
+- **macOS**：关于窗口的版权署名改为 MOE AI LLC。
+- **macOS**：App 体积缩小约 57%（包体 205 → 88 MB）——人声分离用的约 107 MB Metal 内核改为压缩内置、首次使用时解压，Release 构建剥离本地符号并单独保留 dSYM 以便崩溃符号化。感谢 @yamakze（#153）。
+- **macOS**：边下边播不再把尚未解码的下载内容留在内存里——改为从磁盘缓存镜像按 32 KiB 分块读回，峰值内存不再随文件大小增长。感谢 @yamakze（#164、#161）。
+- **macOS**：快速切歌会取消上一首的音源解析、歌词、预取下载和分析，不再让它们在后台跑完；共享的下载只在最后一个使用者退出时才取消。感谢 @yamakze（#165、#161）。
+- **macOS**：关闭 AutoMix 时，普通播放不再预取和分析下一首；开启后恢复准备流程。感谢 @yamakze（#166、#161）。
+- **iOS**：浏览页面更紧凑——板块之间、板块标题与卡片之间的间距缩小，推荐栏标题单行显示，每个推荐栏下方不再留空白带（#170）。
 
 ## 0.3.23 - 2026-09-26
 

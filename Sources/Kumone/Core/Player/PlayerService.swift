@@ -226,6 +226,19 @@ final class PlayerService: ObservableObject {
         return t.isFinite ? t : progress
     }
     private var resolveGeneration = 0
+    private var sourceTask: Task<Void, Never>?
+    private var lyricsTask: Task<Void, Never>?
+    private var currentAnalysisTask: Task<Void, Never>?
+
+    private func invalidateTrackPreparation() {
+        resolveGeneration += 1
+        sourceTask?.cancel()
+        sourceTask = nil
+        lyricsTask?.cancel()
+        lyricsTask = nil
+        currentAnalysisTask?.cancel()
+        currentAnalysisTask = nil
+    }
     /// True while the engine is paused by us (togglePlayPause/pause/
     /// interruption). When false, "resume" must re-issue play() instead —
     /// engine.resume() is a no-op on a drained or never-paused deck.
@@ -240,10 +253,14 @@ final class PlayerService: ObservableObject {
         let localURL: URL
         let level: String?
         let unblockSource: String?
+        let autoMix: Bool
         var analysis: TrackAnalysis?
     }
 
-    private var prefetchTask: Task<Void, Never>?
+    private var prefetchTask: (id: UUID, trackID: Int, generation: Int,
+                              autoMix: Bool, work: Task<Void, Never>)?
+    /// Waiting for the tail window, not a failed transfer to retry every tick.
+    private var gaplessPrefetchDeferred = false
     private var prefetchedNext: PrefetchedNext? { didSet { publishCacheFilesInUse() } }
     private var pendingTransitionTrack: Track?
     /// The plan the engine is currently holding, kept so the stem pre-render
@@ -302,7 +319,7 @@ final class PlayerService: ObservableObject {
     private var offlineScanID = UUID()
     private var networkState = DownloadNetworkState.unknown
     private var networkObservation: AnyCancellable?
-    private var queueOrderSettingsObservation: AnyCancellable?
+    private var autoMixSettingsObservation: AnyCancellable?
     private var offlineActivatedScope: String?
     /// Set by an automatic advance and consumed by `startPlaying`: a song that
     /// turns out to be missing offline is skipped rather than reported.
@@ -317,6 +334,9 @@ final class PlayerService: ObservableObject {
             guard let self else { return }
             if state == .endOfCurrentTrack {
                 self.disarmTransition()
+                if !SettingsManager.shared.automixEnabled { self.schedulePrefetch() }
+            } else if !SettingsManager.shared.automixEnabled {
+                self.schedulePrefetch()
             } else {
                 self.armTransitionIfReady()
             }
@@ -350,8 +370,9 @@ final class PlayerService: ObservableObject {
         // installed once here and never touched again, so no track change, seek
         // or hand-over has to think about it. The closure runs on the audio
         // thread and only writes floats into a preallocated store.
+        let spectrum = AudioSpectrum.shared
         engine.setOutputSampleSink { buffer in
-            AudioSpectrum.shared.ingest(buffer)
+            spectrum.ingest(buffer)
         }
 
         // macOS output routing (incl. AirPlay endpoints the system publishes):
@@ -378,6 +399,7 @@ final class PlayerService: ObservableObject {
                 guard self.isPlaying, self.deckLoaded, !self.isScrubbing else { return }
                 let seconds = self.engine.position(of: self.activeDeck)
                 guard seconds.isFinite else { return }
+                self.updateGaplessPrefetch(at: seconds)
 
                 // Lyrics need this cadence to stay in sync; the cursor itself
                 // only publishes when the line actually changes.
@@ -417,13 +439,20 @@ final class PlayerService: ObservableObject {
         }
         restoreState()
         let settings = SettingsManager.shared
-        queueOrderSettingsObservation = settings.$automixEnabled
+        autoMixSettingsObservation = settings.$automixEnabled
             .combineLatest(settings.$automixOrderEnabled)
-            .map { $0 && $1 }
-            .removeDuplicates()
+            .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 }
             // @Published emits before assignment; reconcile after both values are stored.
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.reconcileQueueOrderAvailability() }
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.reconcileQueueOrderAvailability()
+                if settings.automixEnabled, self.currentAnalysis == nil,
+                   let key = self.currentCacheKey, let file = self.currentLocalURL {
+                    self.ensureCurrentAnalysis(key: key, fileURL: file)
+                }
+                self.schedulePrefetch()
+            }
     }
 
     /// Set while the user drags the seek bar so the time observer doesn't fight the thumb.
@@ -593,6 +622,14 @@ final class PlayerService: ObservableObject {
         updateLyricsCursor(at: seconds)
         engine.seek(deck: activeDeck, to: seconds)
         NowPlayingManager.shared.updateElapsed(seconds, rate: isPlaying ? 1 : 0)
+        if !SettingsManager.shared.automixEnabled {
+            if !Self.gaplessPrefetchReady(position: seconds, duration: duration) {
+                // Seeking back out of the tail withdraws unused preparation.
+                schedulePrefetch()
+            } else {
+                updateGaplessPrefetch(at: seconds)
+            }
+        }
         if wasArmed {
             armTransitionIfReady()
             reconcileParkedPrerender()
@@ -694,6 +731,7 @@ final class PlayerService: ObservableObject {
     func removeFromUpcoming(_ track: Track) {
         if let idx = playNextList.firstIndex(where: { $0.id == track.id }) {
             playNextList.remove(at: idx)
+            schedulePrefetch()
             return
         }
         if let idx = queue.firstIndex(where: { $0.id == track.id }),
@@ -788,7 +826,7 @@ final class PlayerService: ObservableObject {
         guard isFMMode, let track = currentTrack else { return }
         Task {
             await fmAdvance()
-            try? await NeteaseAPI.fmTrash(id: track.id)
+            try? await MusicAPI.fmTrash(id: track.id)
         }
     }
 
@@ -799,7 +837,7 @@ final class PlayerService: ObservableObject {
         }
         if fmUpcoming.isEmpty {
             for attempt in 0..<3 {
-                if let tracks = try? await NeteaseAPI.personalFM(), !tracks.isEmpty {
+                if let tracks = try? await MusicAPI.personalFM(), !tracks.isEmpty {
                     fmUpcoming = tracks
                     break
                 }
@@ -815,7 +853,7 @@ final class PlayerService: ObservableObject {
         pendingAutoAdvance = true
         startPlaying(track)
         if fmUpcoming.count < 1 {
-            if let more = try? await NeteaseAPI.personalFM() {
+            if let more = try? await MusicAPI.personalFM() {
                 fmUpcoming.append(contentsOf: more)
             }
         }
@@ -940,8 +978,14 @@ final class PlayerService: ObservableObject {
         disarmTransition()
         engine.stop(deck: activeDeck.other)
         deckFiles[activeDeck.other] = nil
-        prefetchTask?.cancel()
+        // Keep a transfer for the track being selected alive until playback
+        // joins it; cancelling the old prefetch first would abort useful bytes.
+        if prefetchTask?.trackID != track.id {
+            prefetchTask?.work.cancel()
+            prefetchTask = nil
+        }
         prefetchedNext = nil
+        gaplessPrefetchDeferred = false
         currentAnalysis = nil
         currentLocalURL = nil
         // The active deck is still carrying the *previous* track — `resolveAndLoad`
@@ -987,16 +1031,16 @@ final class PlayerService: ObservableObject {
         // letting them fall back to the decorative animation for the moment it
         // takes to find out whether this source can be tapped.
         AudioSpectrum.shared.beginPreparing()
-        resolveGeneration += 1
+        invalidateTrackPreparation()
         let generation = resolveGeneration
 
         NowPlayingManager.shared.updateMetadata(for: track, duration: track.duration)
         persistState()
 
-        Task {
+        sourceTask = Task {
             await resolveAndLoad(track, generation: generation, localLease: localLease, resumeAt: resumeAt)
         }
-        Task {
+        lyricsTask = Task {
             await loadLyrics(for: track, generation: generation)
         }
     }
@@ -1016,16 +1060,19 @@ final class PlayerService: ObservableObject {
     /// state changes.
     private func resolveSource(for track: Track) async -> ResolvedSource? {
         let quality = SettingsManager.shared.audioQuality.rawValue
-        var data = try? await NeteaseAPI.songURL(ids: [track.id], level: quality).first
+        guard !Task.isCancelled else { return nil }
+        var data = try? await MusicAPI.songURL(ids: [track.id], level: quality).first
+        guard !Task.isCancelled else { return nil }
         if data?.url == nil, quality != AudioQuality.standard.rawValue {
-            data = try? await NeteaseAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
+            data = try? await MusicAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
         }
+        guard !Task.isCancelled else { return nil }
         var url: URL?
         var unblock: String?
         if let urlString = data?.url {
             url = URL(string: urlString.replacingOccurrences(of: "http://", with: "https://"))
         }
-        // NetEase refused — try third-party sources (UnblockNeteaseMusic-style).
+        // The service refused — try third-party sources (unblock-style).
         // #104 made the source list configurable; resolve through the enabled
         // sources (single-shot here, so nothing is excluded).
         if url == nil || data?.freeTrialInfo != nil, SettingsManager.shared.enableUnblock {
@@ -1040,12 +1087,12 @@ final class PlayerService: ObservableObject {
                 data = nil
             }
         }
-        guard let url else { return nil }
+        guard !Task.isCancelled, let url else { return nil }
         let ext = url.pathExtension.isEmpty ? "mp3" : url.pathExtension.lowercased()
         return ResolvedSource(
             url: url,
             key: EngineAudioCache.Key(trackID: track.id, level: data?.level ?? quality,
-                                source: unblock.map { "unblock:\($0)" } ?? "netease",
+                                source: unblock.map { "unblock:\($0)" } ?? Upstream.tag,
                                 fileExtension: ext),
             level: data?.level,
             unblockSource: unblock,
@@ -1060,20 +1107,20 @@ final class PlayerService: ObservableObject {
             playLocalFile(lease.url, lease: lease, for: track, generation: generation, from: resumeAt)
             return
         }
-        guard generation == resolveGeneration else { return }
+        guard !Task.isCancelled, generation == resolveGeneration else { return }
         if usesOfflineQueue {
             // Without a network, the cache is the last place to look.
             if let cached = await EngineAudioCache.shared.cachedFileURL(trackID: track.id) {
-                guard generation == resolveGeneration else { return }
+                guard !Task.isCancelled, generation == resolveGeneration else { return }
                 playLocalFile(cached, lease: nil, for: track, generation: generation, from: resumeAt)
                 return
             }
-            guard generation == resolveGeneration else { return }
+            guard !Task.isCancelled, generation == resolveGeneration else { return }
             unavailableOffline(track, generation: generation)
             return
         }
         let resolved = await resolveSource(for: track)
-        guard generation == resolveGeneration else { return }
+        guard !Task.isCancelled, generation == resolveGeneration else { return }
 
         guard let resolved else {
             consecutiveFailures += 1
@@ -1122,12 +1169,12 @@ final class PlayerService: ObservableObject {
             isBuffering = true
             do {
                 let local = try await EngineAudioCache.shared.download(from: resolved.url, key: key)
-                guard generation == resolveGeneration else { return }
+                guard !Task.isCancelled, generation == resolveGeneration else { return }
                 playLocalFile(local, lease: nil, for: track, generation: generation, from: resumeAt)
                 servedQuality = resolved.level
                 return
             } catch {
-                guard generation == resolveGeneration else { return }
+                guard !Task.isCancelled, generation == resolveGeneration else { return }
                 isBuffering = false
                 isPlaying = false
                 engine.stop(deck: activeDeck)
@@ -1143,14 +1190,13 @@ final class PlayerService: ObservableObject {
 
         if !resolved.isTrial {
             var local = await EngineAudioCache.shared.cachedFileURL(for: key)
-            if local == nil, let inflight = await EngineAudioCache.shared.activeDownload(for: key) {
-                // A prefetch of this very track is mid-flight — wait for it
-                // instead of opening a second transfer of the same file.
+            if local == nil {
                 isBuffering = true
-                local = try? await inflight.value
+                local = try? await EngineAudioCache.shared.waitForDownload(for: key)
+                guard !Task.isCancelled, generation == resolveGeneration else { return }
                 isBuffering = false
             }
-            guard generation == resolveGeneration else { return }
+            guard !Task.isCancelled, generation == resolveGeneration else { return }
             // A cached sidecar (this track has been heard before) lets the deck
             // open at its compensated level right away. On a miss the trim is 0
             // and stays 0 for this play: `ensureCurrentAnalysis` below will
@@ -1158,7 +1204,7 @@ final class PlayerService: ObservableObject {
             // audible jump mid-song, so it takes effect from the next load.
             let cachedAnalysis = analysisWanted
                 ? await AnalysisStore.shared.loadAnalysis(for: key) : nil
-            guard generation == resolveGeneration else { return }
+            guard !Task.isCancelled, generation == resolveGeneration else { return }
             if let local,
                let fileDuration = try? engine.loadFile(
                    at: local, on: activeDeck, trimDB: loudnessTrimDB(for: cachedAnalysis),
@@ -1179,7 +1225,7 @@ final class PlayerService: ObservableObject {
             }
             // Unreadable cache entry — fall through to streaming.
         }
-        guard generation == resolveGeneration else { return }
+        guard !Task.isCancelled, generation == resolveGeneration else { return }
 
         let partURL: URL
         if resolved.isTrial {
@@ -1258,6 +1304,9 @@ final class PlayerService: ObservableObject {
     /// the stream parser can't resync): download the whole file instead and
     /// resume near where it stopped.
     private func handleStreamFailure() {
+        // During source resolution the active deck still carries the previous
+        // track. Its failure must not cancel the new track's preparation.
+        guard deckLoaded else { return }
         if isPlaying { isBuffering = true }
         let generation = resolveGeneration
         let resumeAt = progress
@@ -1266,10 +1315,11 @@ final class PlayerService: ObservableObject {
             streamFallbackFailed()
             return
         }
-        Task {
+        sourceTask?.cancel()
+        sourceTask = Task {
             do {
                 let local = try await EngineAudioCache.shared.download(from: remote, key: key)
-                guard generation == resolveGeneration else { return }
+                guard !Task.isCancelled, generation == resolveGeneration else { return }
                 // Mid-song recovery: keep the level exactly where the listener
                 // has been hearing it (the stream started at unity), so the
                 // fallback is inaudible.
@@ -1291,13 +1341,13 @@ final class PlayerService: ObservableObject {
                 ensureCurrentAnalysis(key: key, fileURL: local)
                 schedulePrefetch()
             } catch {
-                guard generation == resolveGeneration else { return }
+                guard !Task.isCancelled, generation == resolveGeneration else { return }
                 // The network is gone mid-song; a download of it plays on.
                 if let lease = await acquireOfflineLease(for: track, generation: generation, anyQuality: true) {
                     playLocalFile(lease.url, lease: lease, for: track, generation: generation, from: resumeAt)
                     return
                 }
-                guard generation == resolveGeneration else { return }
+                guard !Task.isCancelled, generation == resolveGeneration else { return }
                 streamFallbackFailed()
             }
         }
@@ -1328,9 +1378,68 @@ final class PlayerService: ObservableObject {
         return repeatMode == .all ? activeQueue.first : nil
     }
 
-    /// (Re)start the pipeline for the current auto-advance target. Call after
-    /// playback starts and whenever the upcoming list changes.
+    /// Ordinary gapless playback only buys a download in the last 30 seconds,
+    /// or the last quarter of a short track. This is preparation time, not a
+    /// guarantee that a slow transfer will finish before the boundary.
+    nonisolated static func gaplessPrefetchReady(position: TimeInterval,
+                                                duration: TimeInterval) -> Bool {
+        guard duration.isFinite, duration > 0, position.isFinite,
+              position >= 0, position < duration else { return false }
+        return duration - position <= min(30, duration * 0.25)
+    }
+
+    private func updateGaplessPrefetch(at position: TimeInterval) {
+        guard gaplessPrefetchDeferred,
+              Self.gaplessPrefetchReady(position: position, duration: duration) else { return }
+        schedulePrefetch()
+    }
+
+    /// (Re)start after playback or the upcoming list changes. With AutoMix
+    /// off, the existing playback clock starts deferred work at the tail.
     private func schedulePrefetch() {
+        gaplessPrefetchDeferred = false
+        let autoMix = SettingsManager.shared.automixEnabled
+        let target = autoAdvanceTarget()
+        if !autoMix {
+            currentAnalysisTask?.cancel()
+            currentAnalysisTask = nil
+            if deckLoaded, sleepTimer.state != .endOfCurrentTrack,
+               Self.gaplessPrefetchReady(position: livePlaybackTime, duration: duration),
+               let target {
+                // Queue edits and a completed stream mirror can leave the next
+                // target unchanged. Keep its transfer or ready gapless deck.
+                if let work = prefetchTask, work.trackID == target.id,
+                   work.generation == resolveGeneration, !work.autoMix { return }
+                if let next = prefetchedNext, next.track.id == target.id, !next.autoMix {
+                    armTransitionIfReady()
+                    return
+                }
+            }
+            prefetchTask?.work.cancel()
+            prefetchTask = nil
+            // A hand-over that is already audible finishes normally. Its
+            // midpoint still needs the pending track and its file metadata.
+            // A styled seam may still be settling when AutoMix goes off, so
+            // leave the tail clock to retry instead of forgetting the next
+            // boundary.
+            guard engine.discardPreparedDeck(activeDeck.other) else {
+                gaplessPrefetchDeferred = true
+                return
+            }
+            disarmTransition()
+            deckFiles[activeDeck.other] = nil
+            prefetchedNext = nil
+            AutoMixDebugModel.shared.clearNext()
+            guard deckLoaded, sleepTimer.state != .endOfCurrentTrack else { return }
+            guard isPlaying,
+                  Self.gaplessPrefetchReady(position: livePlaybackTime, duration: duration) else {
+                gaplessPrefetchDeferred = true
+                return
+            }
+        }
+        // Restoring a paused session or resolving a new source does not yet
+        // create a playback context worth downloading the next track for.
+        guard deckLoaded else { return }
         // AutoMix order decides *which* track is next, and until it has there
         // is nothing to prefetch: committing to the list's answer now would
         // download the wrong song and arm it before the choice was made.
@@ -1338,7 +1447,7 @@ final class PlayerService: ObservableObject {
         // latest at `autoMixDeadline`, which is sized so the winner still has
         // time to be downloaded, analyzed and armed.
         if autoMixPickPending {
-            prefetchTask?.cancel()
+            prefetchTask?.work.cancel()
             // Nilled, not just cancelled, so `autoMixMayDownload` can read it
             // as the truthful "no playback-quality transfer is running".
             prefetchTask = nil
@@ -1347,15 +1456,17 @@ final class PlayerService: ObservableObject {
                 nil, stage: .deferred("AutoMix order is still choosing"))
             return
         }
-        prefetchTask?.cancel()
-        let target = autoAdvanceTarget()
+        prefetchTask?.work.cancel()
+        prefetchTask = nil
         if let armed = pendingTransitionTrack {
             // Already armed for the right track — the pipeline is done.
-            if armed.id == target?.id { return }
-            // The armed hand-over points at a track that is no longer next.
+            if armed.id == target?.id, prefetchedNext?.autoMix == autoMix { return }
+            // The target or preparation mode changed. A light gapless deck
+            // needs analysis/trim when AutoMix is enabled, but an already
+            // committed hand-over must finish with its original metadata.
+            guard engine.discardPreparedDeck(activeDeck.other) else { return }
             disarmTransition()
-            engine.stop(deck: activeDeck.other)
-        deckFiles[activeDeck.other] = nil
+            deckFiles[activeDeck.other] = nil
         }
         prefetchedNext = nil
         guard let target else {
@@ -1372,9 +1483,16 @@ final class PlayerService: ObservableObject {
             return
         }
         let generation = resolveGeneration
-        prefetchTask = Task { [weak self] in
+        let taskID = UUID()
+        prefetchTask = (taskID, target.id, generation, autoMix, Task { [weak self] in
             guard let self else { return }
+            defer {
+                // A selected prefetch can outlive its playback generation.
+                // Its late completion must not clear a replacement.
+                if self.prefetchTask?.id == taskID { self.prefetchTask = nil }
+            }
             guard let resolved = await self.resolveForPrefetch(target) else {
+                guard !Task.isCancelled, generation == self.resolveGeneration else { return }
                 AutoMixDebugModel.shared.setNextStage(.failed("no playable source"))
                 return
             }
@@ -1382,29 +1500,28 @@ final class PlayerService: ObservableObject {
             AutoMixDebugModel.shared.setNextStage(.downloading)
             guard let local = try? await EngineAudioCache.shared.download(from: resolved.url, key: resolved.key)
             else {
+                guard !Task.isCancelled, generation == self.resolveGeneration else { return }
                 AutoMixDebugModel.shared.setNextStage(.failed("download failed"))
                 return
             }
             guard !Task.isCancelled, generation == self.resolveGeneration else { return }
             AutoMixDebugModel.shared.setNextStage(.downloaded)
-            // The words next: this track is about to be the *incoming* side of
-            // a seam and, one song later, the outgoing side whose lyric line
-            // decides where a vocal exchange hands over. One small JSON call.
-            Task.detached(priority: .utility) { [id = target.id] in
-                await LyricsSidecar.fetchAndWrite(trackID: id, for: local)
-            }
-            AutoMixDebugModel.shared.setNextStage(.analyzing)
-            let analysis = await self.analysis(for: resolved.key, fileURL: local)
+            // AutoMix uses words/analysis to plan future seams. Plain gapless
+            // needs only the audio; its displayed lyrics load after adoption.
+            async let lyrics: Void = autoMix
+                ? LyricsSidecar.fetchAndWrite(trackID: target.id, for: local) : ()
+            if autoMix { AutoMixDebugModel.shared.setNextStage(.analyzing) }
+            let analysis = autoMix ? await self.analysis(for: resolved.key, fileURL: local) : nil
             guard !Task.isCancelled, generation == self.resolveGeneration,
                   self.autoAdvanceTarget()?.id == target.id else { return }
-            // The `.lrc` write above is detached, so this may read a beat before
-            // the file lands; the sidecar row is re-read on the next re-plan.
             AutoMixDebugModel.shared.setNextAnalysis(analysis, localURL: local)
             self.prefetchedNext = PrefetchedNext(
                 track: target, key: resolved.key, localURL: local,
-                level: resolved.level, unblockSource: resolved.unblockSource, analysis: analysis)
+                level: resolved.level, unblockSource: resolved.unblockSource,
+                autoMix: autoMix, analysis: analysis)
             self.armTransitionIfReady()
-        }
+            await lyrics
+        })
     }
 
     /// Prefetch variant of the shared resolver: trial fragments resolve to
@@ -1428,6 +1545,9 @@ final class PlayerService: ObservableObject {
 
     private func armTransitionIfReady() {
         guard !transitionArmed, let next = prefetchedNext else { return }
+        if !SettingsManager.shared.automixEnabled {
+            guard Self.gaplessPrefetchReady(position: livePlaybackTime, duration: duration) else { return }
+        }
         // "Stop after this track" needs the track to *end*: an armed hand-over
         // (AutoMix or gapless) would carry playback into the next one first.
         guard sleepTimer.state != .endOfCurrentTrack else { return }
@@ -2146,7 +2266,7 @@ final class PlayerService: ObservableObject {
         // checkpoint.
         let cancellableFull: FullStemProvider? = fourLaneRender
             ? StemSeparation.fullProvider.map { full in
-                { request in
+                { @Sendable request in
                     if stop.isCancelled { throw CancellationError() }
                     return try full(request)
                 }
@@ -2431,9 +2551,9 @@ final class PlayerService: ObservableObject {
     private func analysis(for key: EngineAudioCache.Key, fileURL: URL) async -> TrackAnalysis? {
         guard analysisWanted else { return nil }
         if let cached = await AnalysisStore.shared.loadAnalysis(for: key) { return cached }
-        let analyzed = await Task.detached(priority: .utility) {
-            try? TrackAnalyzer.analyze(fileAt: fileURL)
-        }.value
+        guard !Task.isCancelled else { return nil }
+        let analyzed = try? await TrackAnalyzer.analyzeInBackground(fileAt: fileURL)
+        guard !Task.isCancelled else { return nil }
         if let analyzed {
             await AnalysisStore.shared.storeAnalysis(analyzed, for: key)
         }
@@ -2445,10 +2565,11 @@ final class PlayerService: ObservableObject {
     private func ensureCurrentAnalysis(key: EngineAudioCache.Key, fileURL: URL) {
         guard analysisWanted else { return }
         let generation = resolveGeneration
-        Task { [weak self] in
+        currentAnalysisTask?.cancel()
+        currentAnalysisTask = Task { [weak self] in
             guard let self else { return }
             let result = await self.analysis(for: key, fileURL: fileURL)
-            guard generation == self.resolveGeneration, let result else { return }
+            guard !Task.isCancelled, generation == self.resolveGeneration, let result else { return }
             self.currentAnalysis = result
             // The outgoing side of every candidate score just arrived; a pick
             // that was waiting on it can now be made. Harmless once the pick
@@ -2575,16 +2696,16 @@ final class PlayerService: ObservableObject {
         AutoMixDebugModel.shared.clearNext()
         publishDebugNow()
 
-        resolveGeneration += 1
+        invalidateTrackPreparation()
         let generation = resolveGeneration
         NowPlayingManager.shared.updateMetadata(for: next, duration: duration)
         NowPlayingManager.shared.updateElapsed(progress, rate: 1)
         persistState()
-        Task { await loadLyrics(for: next, generation: generation) }
+        lyricsTask = Task { await loadLyrics(for: next, generation: generation) }
 
         if isFMMode, fmUpcoming.count < 1 {
             Task {
-                if let more = try? await NeteaseAPI.personalFM() {
+                if let more = try? await MusicAPI.personalFM() {
                     fmUpcoming.append(contentsOf: more)
                     schedulePrefetch()
                 }
@@ -2595,12 +2716,12 @@ final class PlayerService: ObservableObject {
     private func loadLyrics(for track: Track, generation: Int) async {
         let scope = offlineAccountScope
         if let scope, let saved = await OfflineMetadataStore.shared.lyrics(trackID: track.id, scope: scope) {
-            guard generation == resolveGeneration else { return }
+            guard !Task.isCancelled, generation == resolveGeneration else { return }
             applyLyrics(saved)
         }
-        guard !usesOfflineQueue else { return }
-        let response = try? await NeteaseAPI.lyric(id: track.id)
-        guard generation == resolveGeneration, let response else { return }
+        guard !Task.isCancelled, generation == resolveGeneration, !usesOfflineQueue else { return }
+        let response = try? await MusicAPI.lyric(id: track.id)
+        guard !Task.isCancelled, generation == resolveGeneration, let response else { return }
         applyLyrics(response)
         // The engine caches every song it streams, so each one may play offline.
         if let scope { await OfflineMetadataStore.shared.keepPlaybackData(track: track, lyrics: response, scope: scope) }
@@ -2958,7 +3079,7 @@ final class PlayerService: ObservableObject {
                 allowLowerQuality: anyQuality || !networkState.connected)
         }
         guard let lease else { return nil }
-        guard generation == resolveGeneration, scope == offlineAccountScope,
+        guard !Task.isCancelled, generation == resolveGeneration, scope == offlineAccountScope,
               lease.descriptor.identity.accountScope == scope else {
             try? await OfflineStore.shared.release(lease)
             return nil
@@ -3041,7 +3162,7 @@ final class PlayerService: ObservableObject {
         offlineScan?.cancel()
         let requestID = UUID()
         offlineScanID = requestID
-        resolveGeneration += 1
+        invalidateTrackPreparation()
         let generation = resolveGeneration
         let scope = offlineAccountScope
         var candidates = nextCandidates()
@@ -3105,7 +3226,7 @@ final class PlayerService: ObservableObject {
         offlineScanID = UUID()
         offlineIssue = nil
         guard offlinePlaybackLease != nil else { return }
-        resolveGeneration += 1
+        invalidateTrackPreparation()
         stopForOffline()
         releaseOfflineLease()
         isPlaying = false
@@ -3122,7 +3243,7 @@ final class PlayerService: ObservableObject {
         startScrobbled = true
         let tid = track.id
         let sid = source.sourceID
-        Task.detached { await NeteaseAPI.scrobbleStart(trackID: tid, sourceID: sid) }
+        Task.detached { await MusicAPI.scrobbleStart(trackID: tid, sourceID: sid) }
     }
 
     private func scrobbleIfNeeded(completed: Bool) {
@@ -3131,7 +3252,7 @@ final class PlayerService: ObservableObject {
         let seconds = completed ? Int(duration) : Int(progress)
         let sourceID = source.sourceID
         Task.detached {
-            await NeteaseAPI.scrobbleFinish(trackID: track.id, sourceID: sourceID, seconds: seconds)
+            await MusicAPI.scrobbleFinish(trackID: track.id, sourceID: sourceID, seconds: seconds)
         }
     }
 
@@ -3527,7 +3648,7 @@ final class PlayerService: ObservableObject {
     /// land every few seconds during an escalation, and a pool one track richer
     /// does not meaningfully change an eight-step preview. So the pool-growth
     /// trigger is throttled and the work is skipped rather than queued.
-    static let lookaheadRefreshInterval: TimeInterval = 5
+    nonisolated static let lookaheadRefreshInterval: TimeInterval = 5
 
     /// The throttle rule, in one place: a commit always goes, a landing
     /// analysis waits its turn, and only one computation is ever in flight.
@@ -3659,31 +3780,31 @@ final class PlayerService: ObservableObject {
         case .fm:
             return nil
         case .album:
-            return (try await NeteaseAPI.album(id: context.id).songs, .album(context.id))
+            return (try await MusicAPI.album(id: context.id).songs, .album(context.id))
         case .artist:
-            return (try await NeteaseAPI.artist(id: context.id).hotSongs, .artist(context.id))
+            return (try await MusicAPI.artist(id: context.id).hotSongs, .artist(context.id))
         case .daily:
-            return (try await NeteaseAPI.dailyRecommendSongs(), .daily)
+            return (try await MusicAPI.dailyRecommendSongs(), .daily)
         case .cloud:
-            let songs = try await NeteaseAPI.cloudSongs().data?.compactMap(\.simpleSong) ?? []
+            let songs = try await MusicAPI.cloudSongs().data?.compactMap(\.simpleSong) ?? []
             return (songs, .cloud)
         case .recents:
             guard let uid = AccountStore.shared.profile?.userId else { return nil }
-            return (try await NeteaseAPI.playRecords(uid: uid, week: false).map(\.song), .none)
+            return (try await MusicAPI.playRecords(uid: uid, week: false).map(\.song), .none)
         case .heartbeat:
             // Regenerated from a fresh seed, the same way the Home card does it.
             guard let liked = AccountStore.shared.likedSongsPlaylist,
                   let seed = AccountStore.shared.likedTrackIDs.randomElement() else { return nil }
-            let tracks = try await NeteaseAPI.intelligenceList(songID: seed, playlistID: liked.id)
+            let tracks = try await MusicAPI.intelligenceList(songID: seed, playlistID: liked.id)
             return (tracks, .playlist(liked.id))
         case .playlist:
-            let response = try await NeteaseAPI.playlistDetail(id: context.id)
+            let response = try await MusicAPI.playlistDetail(id: context.id)
             var tracks = response.playlist.tracks
             // /v6/playlist/detail only carries the first page of tracks.
             let remaining = response.playlist.trackIds.map(\.id).dropFirst(tracks.count)
             for chunk in stride(from: 0, to: remaining.count, by: 500)
                 .map({ Array(remaining.dropFirst($0).prefix(500)) }) {
-                guard let more = try? await NeteaseAPI.songDetails(ids: chunk) else { break }
+                guard let more = try? await MusicAPI.songDetails(ids: chunk) else { break }
                 tracks += more.songs
             }
             return (tracks, .playlist(context.id))
@@ -3737,12 +3858,14 @@ final class PlayerService: ObservableObject {
     func checkpointPlayback() { persistState() }
 
     func suspendForAccountChange() {
-        resolveGeneration += 1
+        invalidateTrackPreparation()
         scrobbled = true
         pause()
         stopForOffline()
         releaseOfflineLease()
-        prefetchTask?.cancel()
+        prefetchTask?.work.cancel()
+        prefetchTask = nil
+        gaplessPrefetchDeferred = false
     }
 
     private func persistState() {
@@ -3785,7 +3908,7 @@ final class PlayerService: ObservableObject {
             currentTrack = activeQueue[idx]
             duration = activeQueue[idx].duration
             NowPlayingManager.shared.updateMetadata(for: activeQueue[idx], duration: duration)
-            Task {
+            lyricsTask = Task {
                 await loadLyrics(for: activeQueue[idx], generation: resolveGeneration)
             }
         }

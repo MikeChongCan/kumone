@@ -36,6 +36,12 @@ public struct IOSMainWindow: View {
     public init() {}
 
     public var body: some View {
+        UpstreamGate { gatedBody }
+            .tint(Theme.accent)
+            .preferredColorScheme(settings.appearance.colorScheme)
+    }
+
+    private var gatedBody: some View {
         presentationRoot
             .modifier(OfflinePlaybackAlert(player: player, onDownloads: { openDestination(.downloaded) }, enabled: !player.showNowPlaying))
             .modifier(MeteredDownloadAlert(enabled: !player.showNowPlaying))
@@ -52,6 +58,9 @@ public struct IOSMainWindow: View {
             .task {
                 await DownloadManager.shared.start()
                 await account.bootstrap()
+                if settings.autoCheckUpdates, DistributionChannel.current.allowsSelfUpdate {
+                    IOSUpdater.shared.check(interactive: false)
+                }
             }
             .onChange(of: scenePhase) { phase in
                 guard phase == .active else { return }
@@ -317,6 +326,7 @@ public struct IOSMainWindow: View {
         NavigationStack(path: binding(for: tab)) {
             content().appDestinations()
         }
+        .publishesWindowHorizontalInsets()
     }
 
     @ViewBuilder
@@ -489,6 +499,7 @@ struct IOSMiniPlayerBar: View {
             .buttonStyle(.plain)
             .accessibilityLabel(nowPlayingAccessibilityLabel)
             .accessibilityHint("打开正在播放")
+            .accessibilityIdentifier("mini-player-now-playing")
 
             if !presentation.isInline {
                 Button(action: player.previous) {
@@ -650,7 +661,7 @@ struct IOSLibraryView: View {
                                 .font(.system(size: 32))
                                 .foregroundStyle(Theme.accent)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("登录网易云音乐")
+                                Text("登录账号")
                                     .font(.headline)
                                     .foregroundStyle(.primary)
                                 Text("同步我喜欢的音乐、歌单与每日推荐")
@@ -784,7 +795,7 @@ struct IOSLibraryView: View {
                 guard !name.isEmpty else { return }
                 Task {
                     do {
-                        try await NeteaseAPI.createPlaylist(name: name, isPrivate: false)
+                        try await MusicAPI.createPlaylist(name: name, isPrivate: false)
                         await account.refreshLibrary()
                         ToastCenter.shared.show(String(localized: "歌单已创建"))
                     } catch {

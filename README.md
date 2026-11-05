@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> This repository has no affiliation with NetEase Cloud Music, and contains none of its domains or API addresses.
+
 <div align="right">
 
 **English** | [简体中文](README_CN.md)
@@ -10,9 +13,9 @@
 
 # Kumone
 
-**雲の音 — Native macOS client for NetEase Cloud Music**
+**雲の音 — A native music player for macOS and iOS**
 
-Built with SwiftUI · Talks directly to NetEase's real API · Sparkle auto-updates
+Built with SwiftUI · No third-party server · Sparkle auto-updates
 
 [![Platform](https://img.shields.io/badge/platform-macOS%2015%2B-blue?logo=apple)](#building)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138?logo=swift&logoColor=white)](Package.swift)
@@ -33,16 +36,16 @@ Built with SwiftUI · Talks directly to NetEase's real API · Sparkle auto-updat
 
 ## About the Name
 
-**Kumone** comes from the Japanese **雲の音** (*kumo no ne*, "the sound of clouds"), contracted into one word — **雲音** (くもね, *kumone*). It is a nod to the "cloud" in NetEase **Cloud** Music: the music drifting down to you from the cloud.
+**Kumone** comes from the Japanese **雲の音** (*kumo no ne*, "the sound of clouds"), contracted into one word — **雲音** (くもね, *kumone*). The music drifting down to you from the cloud.
 
 ## Features
 
-- 🔐 **QR code login** — scan with the NetEase Cloud Music app; cookies are persisted locally and auto-refreshed
+- 🔐 **QR code login** — scan with the official app; cookies are persisted locally and auto-refreshed
 - 🏠 **Home** — daily recommendations, Personal FM, Heartbeat Mode, recommended playlists, radar playlists (Personal Radar family, personalized per account), charts, new albums, recommended artists
 - 🧭 **Explore** — category playlists (curated / official / charts / mood) with infinite scrolling
 - 🎵 **Playback** — AVPlayer engine, Standard to Hi-Res quality (lossless with 黑胶 VIP, automatic fallback), shuffle / repeat one / repeat all, play-next queue, gray track detection
 - 🚗 **CarPlay (iOS, opt-in)** — Now Playing, tabbed library, queue, and search templates ship in the binary; activation requires an [Apple CarPlay audio entitlement](https://developer.apple.com/contact/carplay/), which is not granted to most accounts. Build defaults to disabled so the source tree stays open-source-friendly; see [Enabling CarPlay](#enabling-carplay-ios) below
-- 🔓 **Gray track unblocking** — native implementation of UnblockNeteaseMusic's core sources (pyncmd / Kuwo / Kugou); unavailable or trial-only tracks automatically resolve from third-party sources
+- 🔓 **Gray track unblocking** — native implementation of the common unblock sources (pyncmd / Kuwo / Kugou); unavailable or trial-only tracks automatically resolve from third-party sources
 - 🖼 **Immersive now-playing page** — artwork-tinted gradient backdrop, large artwork, big synced lyrics (click the player-bar artwork to open, Esc to close)
 - 📻 **Personal FM** — immersive roaming page with trash / skip
 - 📝 **Lyrics** — glass side panel with line-synced lyrics + translation, click to seek
@@ -135,6 +138,32 @@ Once your developer account has the entitlement approved:
 To test without a car, use the CarPlay Simulator: Xcode ▸ Open Developer Tool ▸
 Simulator, then I/O ▸ External Displays ▸ CarPlay.
 
+### TestFlight (iOS)
+
+The sideload build updates itself from GitHub releases (TrollStore hand-off or
+an IPA download), which App Review does not allow. Builds for App Store Connect
+therefore use the `TestFlight` configuration: Release plus
+`ios/Config/TestFlight.xcconfig`, which writes `KumoneDistribution = testflight`
+into Info.plist. `DistributionChannel` reads it at launch and hides the
+in-app updater; everything else is the same binary. Debug and Release are
+untouched, so CI and contributors keep the sideload build.
+
+```bash
+export KUMONE_TEAM_ID=XXXXXXXXXX          # or DEVELOPMENT_TEAM in ios/Config/TestFlight.local.xcconfig
+make testflight                           # archive + export .build/testflight/export/KumoneIOS.ipa
+make testflight UPLOAD=1                  # archive + upload to App Store Connect
+make testflight UPLOAD=1 CARPLAY=1        # once the carplay-audio entitlement is approved
+```
+
+The version comes from the latest `v*` tag and the build number from the commit
+count, the same as the release workflow; override with
+`Scripts/testflight.sh --version 0.4.0 --build 1234`. Set `ASC_KEY_ID`,
+`ASC_ISSUER_ID` and `ASC_KEY_PATH` to an App Store Connect API key for
+unattended provisioning and upload; without them Xcode's signed-in account is
+used. `CARPLAY=1` goes through the same `make configure-carplay` overlay as a
+device build, so it fails to sign until the App ID has the capability.
+
+
 ## Building
 
 Requires macOS 15+ and Xcode 26+.
@@ -150,7 +179,7 @@ Scripts/compile_and_run.sh     # kill → repackage → relaunch
 ```
 Sources/Kumone/
 ├── Core/
-│   ├── API/            # NeteaseCrypto (weapi/eapi encryption), NeteaseClient (transport + cookies), NeteaseAPI (~50 endpoints)
+│   ├── API/            # RequestCrypto (weapi/eapi encryption), MusicClient (transport + cookies), MusicAPI (~50 endpoints)
 │   ├── Models/         # unified Track model (tolerates both JSON shapes), lyrics parser
 │   ├── Player/         # PlayerService (queue / shuffle / repeat / FM / URL resolution), UnblockService, NowPlayingManager
 │   ├── Storage/        # AccountStore, SettingsManager, two-tier image cache
@@ -160,26 +189,21 @@ Sources/Kumone/
 ```
 
 No third-party API server involved: weapi (double AES-CBC + RSA) and eapi
-(AES-ECB + MD5 digest) encryption are implemented natively in Swift, and
-requests go straight to `music.163.com` / `interface.music.163.com`.
-
-## Related projects
-
-Want a **tvOS** build? Check out [Sonimbus](https://github.com/gee1k/sonimbus), a NetEase Cloud Music client for Apple TV maintained by my friend Svend.
+(AES-ECB + MD5 digest) encryption are implemented natively in Swift.
 
 ## Credits
 
 Kumone is written from scratch in Swift. No code was copied from the projects
 below, but their design and implementation ideas were referenced extensively:
 
-- [YesPlayMusic](https://github.com/qier222/YesPlayMusic) (MIT, © qier222) — feature design, NetEase API endpoints and behavior
+- [YesPlayMusic](https://github.com/qier222/YesPlayMusic) (MIT, © qier222) — feature design, and a reference for their API design conventions
 - [kaset](https://github.com/sozercan/kaset) (MIT, © sozercan) — UI design system, motion, and SwiftPM packaging approach
-- [UnblockNeteaseMusic/server](https://github.com/UnblockNeteaseMusic/server) (LGPL-3.0-only) — third-party source endpoints and matching strategy for gray tracks (`UnblockService.swift` is an independent Swift reimplementation)
+- The open-source gray-track unblock server project (LGPL-3.0-only) — a reference for their API design conventions and source matching strategy (`UnblockService.swift` is an independent Swift reimplementation)
 - [LyricsX](https://github.com/ddddxxx/LyricsX) (MPL-2.0, © ddddxxx) — desktop lyrics window design reference (window configuration, screen-factor positioning; `DesktopLyrics.swift` is an independent SwiftUI implementation)
 
 ## License
 
 Licensed under [LGPL-3.0-only](LICENSE) (the [GPL-3.0](COPYING) text is
 included alongside). For learning and personal use only — all music data and
-rights belong to NetEase Cloud Music and the respective source platforms. No
+rights belong to their respective owners and source platforms. No
 downloading, no social features.
