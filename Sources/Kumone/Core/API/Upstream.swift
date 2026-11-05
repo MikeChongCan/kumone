@@ -79,7 +79,8 @@ enum Upstream {
         return try? JSONDecoder().decode(Hosts.self, from: data)
     }
 
-    static var hosts: Hosts? { state.withLock { $0 } }
+    // Fork: no first-launch quiz — fall back to the known answers.
+    static var hosts: Hosts? { state.withLock { $0 } ?? Hosts(api: apiTarget, cdn: cdnTarget) }
     static var isConfigured: Bool { hosts != nil }
 
     /// Stores the answers. Pass `persist: false` from tests.

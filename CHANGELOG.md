@@ -17,7 +17,6 @@
 - **iOS + macOS**: iCloud sync (off by default) — continue playback where another device left off, keep settings in sync, and optionally share your sign-in between devices through iCloud Drive or a folder you choose. Shared sign-ins are encrypted with a sync password you set, and signing out revokes the session once no other device is using it. Thanks @yamakze (#138).
 - **iOS + macOS**: a setting to stop the now-playing artwork from opening the album when clicked — Settings → 点击封面打开专辑, on by default. Thanks @danielzmeow (#144, closes #143).
 - **iOS + macOS**: word-by-word lyrics now run for every song — when NetEase has no verbatim timing for a track, the line's time is spread across its characters (the way mygo-cloudmusic does it), so the karaoke wipe no longer falls back to plain line highlighting. Punctuation and spaces light up with the character before them instead of taking singing time of their own.
-- **iOS + macOS**: a short first-launch check — answer two simple arithmetic questions to get started.
 - **macOS**: desktop lyrics now sing along — with 逐字歌词（卡拉OK） on, the floating line lights up character by character from the song's word timings, the same wipe as the now-playing page; it freezes while paused and keeps running with the main window hidden (#174).
 - **iOS + macOS**: a new app icon — a geometric K monogram in white on the app's vermilion accent, drawn as an Icon Composer bundle so macOS 26 renders it with the system's glass treatment (#173).
 - **macOS**: a native menu bar player — cover, title, artist, elapsed time and a like button, with play/pause, previous, next and Settings in its overflow menu. Off by default; turn it on under Settings → 通用 → 在菜单栏显示. Thanks @yamakze (#155, closes #132).
@@ -71,7 +70,6 @@
 - **iOS + macOS**：iCloud 同步(默认关闭)——在另一台设备上接续播放、同步设置,并可通过 iCloud 云盘或自选文件夹在设备间共享登录。共享的登录信息以你设置的同步密码加密,退出登录时若已没有其他设备在用该会话,会一并注销。感谢 @yamakze（#138）。
 - **iOS + macOS**：新增「点击封面打开专辑」开关（设置 → 播放页），默认开启；关闭后播放页点击封面不再跳转到专辑。感谢 @danielzmeow（#144，关闭 #143）。
 - **iOS + macOS**：逐字歌词覆盖所有歌曲——网易云没有提供逐字时间轴的歌曲，参照 mygo-cloudmusic 的做法把每行时长按字分摊，卡拉OK 式逐字点亮不再退回整行高亮；标点和空格不再占用演唱时间，跟随前一个字点亮。
-- **iOS + macOS**：首次启动新增一个小验证——答对两道简单的算术题即可开始使用。
 - **macOS**：桌面歌词支持逐字卡拉 OK——开启「逐字歌词（卡拉OK）」后，悬浮歌词按歌曲的逐字时间逐个亮起，与播放页同一套扫光；暂停时停住，主窗口隐藏时照常运行（#174）。
 - **iOS + macOS**：全新 App 图标——朱红底色上的白色几何 K 字母，以 Icon Composer 包提供，macOS 26 会用系统玻璃效果渲染（#173）。
 - **macOS**：原生菜单栏播放器——封面、歌名、歌手、播放时间和喜欢按钮，播放/暂停、上一首、下一首与设置入口收纳在更多菜单中。默认关闭，在 设置 → 通用 → 在菜单栏显示 开启。感谢 @yamakze（#155，关闭 #132）。
