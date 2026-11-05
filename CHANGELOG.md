@@ -59,6 +59,8 @@
 - **macOS**: switching tracks quickly cancels the previous track's source resolution, lyrics, prefetch download and analysis instead of letting them finish in the background; a shared download is only cancelled once its last consumer leaves. Thanks @yamakze (#165, #161).
 - **macOS**: with AutoMix off, the next track is no longer prefetched and analysed during plain playback; turning AutoMix on resumes the preparation. Thanks @yamakze (#166, #161).
 - **iOS**: tighter browsing pages — less space between sections and between a section title and its cards, single-line shelf titles, and no blank band under each shelf (#170).
+- **iOS**: the next songs are now cached ahead on cellular too — the next two songs (the next five on Wi‑Fi, as before), so the queue keeps going on a weak signal. Low Data Mode and Low Power Mode still turn it off.
+- **macOS**: the next two songs in the queue are always kept in the song cache, with AutoMix on or off, so skipping ahead or a slow network no longer waits on a fresh download.
 
 ---
 
@@ -112,6 +114,8 @@
 - **macOS**：快速切歌会取消上一首的音源解析、歌词、预取下载和分析，不再让它们在后台跑完；共享的下载只在最后一个使用者退出时才取消。感谢 @yamakze（#165、#161）。
 - **macOS**：关闭 AutoMix 时，普通播放不再预取和分析下一首；开启后恢复准备流程。感谢 @yamakze（#166、#161）。
 - **iOS**：浏览页面更紧凑——板块之间、板块标题与卡片之间的间距缩小，推荐栏标题单行显示，每个推荐栏下方不再留空白带（#170）。
+- **iOS**：移动网络下也会提前缓存接下来的两首歌（Wi‑Fi 下仍为五首），信号差时队列不再卡住；低数据模式和低电量模式下仍不缓存。
+- **macOS**：无论是否开启 AutoMix，队列里接下来的两首歌都会提前下载到歌曲缓存，切歌或网络慢时不再等待重新下载。
 
 ## 0.3.23 - 2026-09-26
 

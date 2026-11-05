@@ -62,10 +62,16 @@ final class QueuePrefetcher {
         self.completion = completion
     }
 
-    /// Only a free, unmetered network and a device not saving power fill the
-    /// cache ahead of time.
+    /// Fork: any connected network that is not in Low Data Mode, on a device
+    /// not saving power, fills the cache ahead of time. A metered network
+    /// (cellular, hotspot) gets a shorter window; see ``tracksAhead(network:)``.
     nonisolated static func permits(network: DownloadNetworkState, lowPower: Bool) -> Bool {
-        network.connected && !network.expensive && !network.constrained && !lowPower
+        network.connected && !network.constrained && !lowPower
+    }
+
+    /// How many upcoming songs to keep cached on this network.
+    nonisolated static func tracksAhead(network: DownloadNetworkState) -> Int {
+        network.expensive ? 2 : PrefetchLimits().tracks
     }
 
     func update(_ next: QueuePrefetchRequest?) {
@@ -150,7 +156,7 @@ final class QueuePrefetcher {
     /// or of a type it cannot name.
     private func store(_ source: QueuePrefetchSource, track: Track, quality: String, limitMB: Int, ticket: Int) async throws -> Int64? {
         var urlRequest = URLRequest(url: CDNHost.preferred(for: source.url))
-        urlRequest.allowsExpensiveNetworkAccess = false
+        urlRequest.allowsExpensiveNetworkAccess = true
         urlRequest.allowsConstrainedNetworkAccess = false
         let (temporary, response) = try await downloadWithFailover(urlRequest, ticket: ticket)
         let fileManager = FileManager.default

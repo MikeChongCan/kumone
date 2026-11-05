@@ -261,6 +261,8 @@ final class PlayerService: ObservableObject {
                               autoMix: Bool, work: Task<Void, Never>)?
     /// Waiting for the tail window, not a failed transfer to retry every tick.
     private var gaplessPrefetchDeferred = false
+    /// Fork: cache downloads for the next few tracks, keyed by track ID.
+    private var cacheWarmTasks: [Int: Task<Void, Never>] = [:]
     private var prefetchedNext: PrefetchedNext? { didSet { publishCacheFilesInUse() } }
     private var pendingTransitionTrack: Track?
     /// The plan the engine is currently holding, kept so the stem pre-render
@@ -1394,9 +1396,77 @@ final class PlayerService: ObservableObject {
         schedulePrefetch()
     }
 
+    // MARK: - Cache warm-ahead (fork)
+
+    /// How many upcoming tracks are kept downloaded in the song cache.
+    nonisolated static let cacheWarmAheadCount = 2
+
+    /// The next `limit` tracks the queue would play on its own, in order.
+    /// Wraps for repeat-all; never repeats the current track.
+    nonisolated static func warmCandidates(queue: [Track], currentIndex: Int, playNext: [Track],
+                                           repeatAll: Bool, currentID: Int?, limit: Int) -> [Track] {
+        var result: [Track] = []
+        var seen: Set<Int> = currentID.map { [$0] } ?? []
+        func add(_ track: Track) {
+            guard result.count < limit, seen.insert(track.id).inserted else { return }
+            result.append(track)
+        }
+        playNext.forEach(add)
+        guard !queue.isEmpty, currentIndex >= 0, currentIndex < queue.count else { return result }
+        var idx = currentIndex + 1
+        for _ in 0..<queue.count where result.count < limit {
+            if idx >= queue.count {
+                guard repeatAll else { break }
+                idx = 0
+            }
+            if idx == currentIndex { break }
+            add(queue[idx])
+            idx += 1
+        }
+        return result
+    }
+
+    /// Keep the next couple of tracks downloaded whether or not AutoMix is
+    /// on, so a skip or a slow network does not wait on a fresh transfer.
+    /// Download only: no analysis, no deck. Playback finds the file in the
+    /// cache, or joins the transfer still in flight for the same key.
+    private func warmUpcomingCache() {
+        let settings = SettingsManager.shared
+        let allowed = deckLoaded && settings.enableAudioCache && !usesOfflineQueue
+            && networkState.connected && !networkState.constrained && repeatMode != .one
+        let upcoming: [Track]
+        if !allowed {
+            upcoming = []
+        } else if isFMMode {
+            upcoming = Array(fmUpcoming.filter { $0.id != currentTrack?.id }.prefix(Self.cacheWarmAheadCount))
+        } else {
+            upcoming = Self.warmCandidates(queue: activeQueue, currentIndex: currentIndex, playNext: playNextList,
+                                           repeatAll: repeatMode == .all, currentID: currentTrack?.id,
+                                           limit: Self.cacheWarmAheadCount)
+        }
+        // The current track stays in the keep set: the transfer warmed for
+        // it may be the one its playback joined.
+        var keep = Set(upcoming.map(\.id))
+        if let id = currentTrack?.id { keep.insert(id) }
+        for (id, task) in cacheWarmTasks where !keep.contains(id) {
+            task.cancel()
+            cacheWarmTasks[id] = nil
+        }
+        for track in upcoming where cacheWarmTasks[track.id] == nil
+            && !DownloadManager.shared.isDownloaded(trackID: track.id) {
+            cacheWarmTasks[track.id] = Task { [weak self] in
+                guard let self, let resolved = await self.resolveForPrefetch(track),
+                      !Task.isCancelled else { return }
+                if await EngineAudioCache.shared.cachedFileURL(for: resolved.key) != nil { return }
+                _ = try? await EngineAudioCache.shared.download(from: resolved.url, key: resolved.key)
+            }
+        }
+    }
+
     /// (Re)start after playback or the upcoming list changes. With AutoMix
     /// off, the existing playback clock starts deferred work at the tail.
     private func schedulePrefetch() {
+        warmUpcomingCache()
         gaplessPrefetchDeferred = false
         let autoMix = SettingsManager.shared.automixEnabled
         let target = autoAdvanceTarget()

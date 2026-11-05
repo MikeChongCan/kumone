@@ -1325,7 +1325,9 @@ final class PlayerService: ObservableObject {
         guard isPlaying, !isBuffering, SettingsManager.shared.enableAudioCache, let current = currentTrack,
               QueuePrefetcher.permits(network: networkState, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled)
         else { queuePrefetcher.update(nil); return }
-        let upcoming = PrefetchLimits().window(nextCandidates().map(\.track))
+        var limits = PrefetchLimits()
+        limits.tracks = QueuePrefetcher.tracksAhead(network: networkState)
+        let upcoming = limits.window(nextCandidates().map(\.track))
         guard !upcoming.isEmpty else { queuePrefetcher.update(nil); return }
         let scope = offlineAccountScope
         let pending = Set(DownloadManager.shared.pendingJobs.filter { $0.accountScope == scope }.map(\.track.id))

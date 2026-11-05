@@ -10,7 +10,7 @@
 # Required environment:
 #   SIGN_IDENTITY   "Developer ID Application: … (TEAMID)"
 # Optional:
-#   ASC_PROFILE     asc auth profile holding the notary API key (default: Default)
+#   ASC_PROFILE     asc auth profile holding the notary API key (default: rockiestar)
 #   GH_REPO         GitHub repo for the release (default: CatStudioApp/kumone)
 #   ARCHES          e.g. "arm64 x86_64" for a universal build (see build-app.sh)
 #
@@ -27,7 +27,7 @@ cd "$ROOT"
 APP_NAME="Kumone"
 APP_BUNDLE="$ROOT/.build/app/$APP_NAME.app"
 DIST="$ROOT/dist"
-ASC_PROFILE="${ASC_PROFILE:-Default}"
+ASC_PROFILE="${ASC_PROFILE:-rockiestar}"
 GH_REPO="${GH_REPO:-CatStudioApp/kumone}"
 FEED_URL="https://github.com/$GH_REPO/releases/latest/download/appcast.xml"
 SPARKLE_BIN="$(find "$ROOT/.build/artifacts" -type d -path '*Sparkle/bin' 2>/dev/null | head -n1)"
