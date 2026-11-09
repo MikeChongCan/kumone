@@ -114,6 +114,7 @@
 "创建" = "Create";
 "创建并收藏" = "Create & Add";
 "已收藏到「%@」" = "Added to “%@”";
+"歌单中已有此歌曲" = "Already in this playlist";
 "歌单已创建" = "Playlist created";
 "取消" = "Cancel";
 "删除歌单" = "Delete Playlist";
@@ -560,3 +561,9 @@
 "开始使用" = "Get Started";
 "请先完成首次使用的设置" = "Finish first-launch setup first";
 "请先登录账号" = "Sign in first";
+
+/* Main window sidebar (macOS) */
+"显示或隐藏边栏" = "Show or Hide Sidebar";
+"显示或隐藏边栏 (⌃⌘S)" = "Show or hide the sidebar (⌃⌘S)";
+"隐藏边栏" = "Hide Sidebar";
+"显示边栏" = "Show Sidebar";
