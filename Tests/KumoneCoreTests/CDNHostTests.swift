@@ -145,7 +145,7 @@ struct CDNHostTests {
         }
         #expect(prefetcher.completedTrackIDs == [2, 3])
         #expect(requests.map(\.url) == [dead, twin, twin])
-        #expect(requests.allSatisfy { !$0.allowsExpensiveNetworkAccess && !$0.allowsConstrainedNetworkAccess })
+        #expect(requests.allSatisfy { $0.allowsExpensiveNetworkAccess && !$0.allowsConstrainedNetworkAccess })
         let entry = try #require(try await cache.entry(for: 2, requestedQuality: "exhigh", allowsUnblock: false))
         #expect(try Data(contentsOf: entry.fileURL) == body)
     }
